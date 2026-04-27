@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Points Optimizer Agent UI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Credit Card & Travel Points Optimizer</h1>
+            <div id="status" class="status disconnected">Disconnected</div>
+        </header>
+
+        <main>
+            <div class="panel agent-log-panel">
+                <h2>Agent Thought Process</h2>
+                <div id="agent-logs" class="logs-container">
+                    <!-- Logs will appear here -->
+                </div>
+            </div>
+
+            <div class="panel result-panel">
+                <h2>Generated Strategy (Generative UI)</h2>
+                <div id="strategy-container" class="strategy-container empty">
+                    <p class="placeholder">Waiting for agent to compute optimal strategy...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
