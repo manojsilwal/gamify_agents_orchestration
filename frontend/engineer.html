@@ -3,184 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Engineer Game View - Architecture Map</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Engineer Game View - Agent Swarm</title>
+    <!-- Load React and Babel for standalone JSX execution -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-
-        body {
-            font-family: 'Share Tech Mono', monospace;
-            background-color: #1a1a1a;
-            color: #d1d5db;
-            overflow-x: hidden;
-        }
-
-        /* Graph Lines styling using pseudo-elements */
-        .layer-container {
-            position: relative;
-        }
-
-        /* Box Styles */
-        .box-summoner { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; }
-        .box-scout { background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; }
-        .box-analyst { background: rgba(139, 92, 246, 0.1); border: 1px solid #8b5cf6; }
-        .box-executor { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; }
-        .box-auditor { background: rgba(245, 158, 11, 0.1); border: 1px solid #f59e0b; }
-
-        .box-memory { background: rgba(180, 83, 9, 0.1); border: 1px solid #b45309; }
-        .box-improve { background: rgba(77, 124, 15, 0.1); border: 1px solid #4d7c0f; }
-
-        .active-glow {
-            box-shadow: 0 0 15px currentColor;
-            transform: scale(1.02);
-            transition: all 0.3s ease;
-        }
-
-        .log-panel::-webkit-scrollbar { width: 4px; }
-        .log-panel::-webkit-scrollbar-track { background: transparent; }
-        .log-panel::-webkit-scrollbar-thumb { background: #4b5563; }
-
-        .skill-badge {
-            background: #374151;
-            color: #9ca3af;
-            border: 1px solid #4b5563;
-        }
-        .skill-badge.active {
-            background: #2563eb;
-            color: #ffffff;
-            border-color: #60a5fa;
-            box-shadow: 0 0 10px #2563eb;
-        }
-
-        /* Animations */
-        @keyframes flash {
-            0% { opacity: 0.5; }
-            50% { opacity: 1; }
-            100% { opacity: 0.5; }
-        }
-        .anim-flash { animation: flash 1s infinite; }
+        body { margin: 0; padding: 0; background: #06090f; color: #94a3b8; font-family: 'Courier New', monospace; overflow: hidden; }
+        .back-link { position: absolute; top: 10px; right: 20px; z-index: 1000; font-size: 10px; color: #e2e8f0; text-decoration: none; border: 1px solid #334155; padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,0.5); }
+        .back-link:hover { background: #1e293b; }
     </style>
 </head>
-<body class="p-8 min-h-screen flex flex-col items-center">
+<body>
+    <a href="index.html" class="back-link">← User View</a>
+    <div id="root"></div>
 
-    <div class="absolute top-4 left-4 z-50">
-        <a href="index.html" class="text-sm border border-gray-600 px-3 py-1 rounded hover:bg-gray-800 transition">← Back to Game UI</a>
-    </div>
-
-    <h1 class="text-2xl font-bold mb-12 text-center text-gray-300">AgentCraft Architecture Dashboard</h1>
-
-    <div class="w-full max-w-5xl flex flex-col gap-12 relative">
-
-        <!-- LAYER 2: Orchestrator -->
-        <div class="flex flex-col items-center layer-container">
-            <div class="absolute -left-20 top-4 text-xs text-gray-500 rotate-[-90deg] tracking-widest">LAYER 2</div>
-            <div id="agent-Summoner" class="box-summoner rounded-lg p-4 w-[400px] text-center transition-all duration-300">
-                <h2 class="text-xl font-bold text-[#10b981] mb-1">Summoner — Mission orchestrator</h2>
-                <p class="text-sm text-[#10b981]/70">Routes tasks • monitors state • injects shared context</p>
-                <div id="Summoner-status" class="text-xs mt-2 text-gray-400 h-4">IDLE</div>
-            </div>
-
-            <!-- Connection Lines -->
-            <div class="h-8 w-px bg-gray-600 mt-4 relative">
-                <div class="absolute bottom-0 -left-[300px] w-[600px] h-px bg-gray-600"></div>
-                <!-- Drop lines to agents -->
-                <div class="absolute top-0 -left-[300px] h-8 w-px bg-gray-600"></div>
-                <div class="absolute top-0 -left-[100px] h-8 w-px bg-gray-600"></div>
-                <div class="absolute top-0 right-[100px] h-8 w-px bg-gray-600"></div>
-                <div class="absolute top-0 right-[300px] h-8 w-px bg-gray-600"></div>
-            </div>
-        </div>
-
-        <!-- LAYER 2: Agents -->
-        <div class="flex justify-between w-full layer-container mt-4">
-            <!-- Scout -->
-            <div id="agent-Scout" class="box-scout rounded-lg p-3 w-[22%] opacity-50 transition-all duration-300">
-                <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xl">🔍</span>
-                    <h3 class="font-bold text-[#3b82f6] text-lg">Scout</h3>
-                </div>
-                <p class="text-xs text-[#3b82f6]/70">Data Recon</p>
-                <p class="text-[10px] text-gray-500 mt-1">Lv3 • 240xp</p>
-            </div>
-
-            <!-- Analyst -->
-            <div id="agent-Analyst" class="box-analyst rounded-lg p-3 w-[22%] opacity-50 transition-all duration-300">
-                <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xl">📊</span>
-                    <h3 class="font-bold text-[#8b5cf6] text-lg">Analyst</h3>
-                </div>
-                <p class="text-xs text-[#8b5cf6]/70">Market Intel</p>
-                <p class="text-[10px] text-gray-500 mt-1">Lv5 • 380xp</p>
-            </div>
-
-            <!-- Executor -->
-            <div id="agent-Executor" class="box-executor rounded-lg p-3 w-[22%] opacity-50 transition-all duration-300">
-                <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xl">⚡</span>
-                    <h3 class="font-bold text-[#10b981] text-lg">Executor</h3>
-                </div>
-                <p class="text-xs text-[#10b981]/70">Reports & Actions</p>
-                <p class="text-[10px] text-gray-500 mt-1">Lv4 • 290xp</p>
-            </div>
-
-            <!-- Auditor -->
-            <div id="agent-Auditor" class="box-auditor rounded-lg p-3 w-[22%] opacity-50 transition-all duration-300">
-                <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xl">🛡️</span>
-                    <h3 class="font-bold text-[#f59e0b] text-lg">Auditor</h3>
-                </div>
-                <p class="text-xs text-[#f59e0b]/70">QA & Risk</p>
-                <p class="text-[10px] text-gray-500 mt-1">Lv2 • 90xp</p>
-            </div>
-        </div>
-
-        <div class="flex justify-center"><div class="h-8 w-px bg-gray-600"></div></div>
-
-        <!-- LAYER 3: Skills -->
-        <div class="flex flex-col items-center layer-container border border-gray-700/50 p-4 rounded-lg bg-black/20">
-            <div class="absolute -left-20 top-8 text-xs text-gray-500 rotate-[-90deg] tracking-widest">LAYER 3</div>
-            <h3 class="text-sm font-bold text-gray-400 mb-4 text-center w-full border-b border-gray-700 pb-2">Skill System — agent toolbelt</h3>
-            <div class="flex gap-4 justify-center w-full">
-                <div id="skill-ListingCrawl" class="skill-badge px-3 py-1 rounded text-xs">ListingCrawl</div>
-                <div id="skill-PriceCalc" class="skill-badge px-3 py-1 rounded text-xs">PriceCalc</div>
-                <div id="skill-TrendAnalysis" class="skill-badge px-3 py-1 rounded text-xs">TrendAnalysis</div>
-                <div id="skill-ReportGen" class="skill-badge px-3 py-1 rounded text-xs">ReportGen</div>
-                <div id="skill-RiskAssess" class="skill-badge px-3 py-1 rounded text-xs">RiskAssess</div>
-            </div>
-        </div>
-
-        <div class="flex justify-center"><div class="h-8 w-px bg-gray-600"></div></div>
-
-        <!-- LAYER 4: Memory & Loop -->
-        <div class="flex justify-between layer-container">
-            <div class="absolute -left-20 top-8 text-xs text-gray-500 rotate-[-90deg] tracking-widest">LAYER 4</div>
-
-            <div id="hub-Memory" class="box-memory rounded-lg p-4 w-[48%] transition-all duration-300">
-                <h3 class="font-bold text-[#b45309] text-center mb-1">CORAL Memory Hub</h3>
-                <p class="text-xs text-[#b45309]/70 text-center">Attempts • Notes • Skills (SQLite)</p>
-                <p class="text-[10px] text-center mt-1 text-[#b45309]/50">Shared knowledge across agents</p>
-            </div>
-
-            <div id="hub-Improve" class="box-improve rounded-lg p-4 w-[48%] transition-all duration-300">
-                <h3 class="font-bold text-[#4d7c0f] text-center mb-1">Self-Improvement Loop</h3>
-                <p class="text-xs text-[#4d7c0f]/70 text-center">Nightly reflection • Mutation engine</p>
-                <p class="text-[10px] text-center mt-1 text-[#4d7c0f]/50">Prompt evolution • A-Evolve pattern</p>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Live Logs Terminal -->
-    <div class="fixed bottom-0 left-0 w-full h-48 bg-[#0a0a0a] border-t border-gray-800 p-4 font-mono text-xs">
-        <div class="flex justify-between items-center border-b border-gray-800 pb-2 mb-2">
-            <span class="text-gray-500">TERMINAL OUTPUT</span>
-            <span id="conn-status" class="text-green-500 anim-flash">● LIVE</span>
-        </div>
-        <div id="logs" class="log-panel h-32 overflow-y-auto flex flex-col gap-1">
-            <!-- Logs appear here -->
-        </div>
-    </div>
-
-    <script src="engineer.js"></script>
+    <script type="text/babel" src="engineer.js"></script>
 </body>
 </html>
