@@ -4,41 +4,82 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Points Optimizer - End User</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: sans-serif; background: #f0f4f8; margin: 0; padding: 2rem; color: #333; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { margin-top: 0; color: #1e3a8a; }
-        .form-group { margin-bottom: 1.5rem; }
-        label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
-        input[type="text"] { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem; }
-        button:hover { background: #2563eb; }
-        #status { font-size: 0.9rem; margin-top: 1rem; color: #6b7280; }
-        .result-box { margin-top: 2rem; padding: 1.5rem; background: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 4px; display: none; }
-        .result-box h2 { margin-top: 0; font-size: 1.25rem; }
-        .cards { font-weight: bold; color: #0369a1; }
-        .nav { margin-bottom: 1rem; text-align: right; }
-        .nav a { color: #3b82f6; text-decoration: none; font-size: 0.9rem; }
+        body { font-family: 'Inter', sans-serif; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+        .bg-gradient-custom {
+            background: linear-gradient(135deg, #e0e7ff 0%, #ede9fe 50%, #fce7f3 100%);
+        }
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in { animation: fade-in 0.5s ease-out forwards; }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="nav"><a href="engineer.html">Go to Engineer Dashboard &rarr;</a></div>
-        <h1>Travel Points Optimizer</h1>
-        <p>Tell us your travel goals, and our AI agents will find the best credit card and points transfer combinations for you.</p>
+<body class="bg-gradient-custom min-h-screen flex items-center justify-center p-4">
+    <div class="absolute top-6 right-6">
+        <a href="engineer.html" class="text-sm font-medium text-indigo-600 hover:text-indigo-800 transition-colors bg-white/50 px-4 py-2 rounded-full shadow-sm backdrop-blur-md">
+            Engineer Dashboard &rarr;
+        </a>
+    </div>
 
-        <div class="form-group">
-            <label for="goal">What is your travel goal?</label>
-            <input type="text" id="goal" placeholder="e.g., Business class to Japan for two people staying at luxury hotels">
+    <div class="w-full max-w-2xl glass-panel rounded-3xl p-8 shadow-2xl">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-extrabold text-gray-900 tracking-tight mb-3">Travel Points Optimizer</h1>
+            <p class="text-gray-600 text-lg">AI agents analyzing millions of combinations to find your perfect travel strategy.</p>
         </div>
-        <button id="searchBtn">Find Best Strategy</button>
-        <div id="status">Ready</div>
 
-        <div id="result" class="result-box">
-            <h2>Optimal Strategy Found!</h2>
-            <p><strong>Recommended Cards:</strong> <span id="res-cards" class="cards"></span></p>
-            <p><strong>Transfer Partners:</strong> <span id="res-partners"></span></p>
-            <p><strong>Sweet Spot:</strong> <span id="res-sweetspot"></span></p>
+        <div class="space-y-6">
+            <div>
+                <label for="goal" class="block text-sm font-semibold text-gray-700 mb-2">What is your dream trip?</label>
+                <div class="relative">
+                    <input type="text" id="goal"
+                           class="w-full pl-4 pr-12 py-4 rounded-xl border border-gray-200 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 transition-all text-lg shadow-sm"
+                           placeholder="e.g. First class to Tokyo with luxury hotels">
+                    <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-xl">✈️</div>
+                </div>
+            </div>
+
+            <button id="searchBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl transition-all transform hover:scale-[1.02] shadow-lg flex justify-center items-center gap-2">
+                <span>Find Best Strategy</span>
+                <svg class="w-5 h-5 hidden" id="spinner" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            </button>
+
+            <div id="status" class="text-center text-sm font-medium text-indigo-600 h-5">Connecting to AI Swarm...</div>
+        </div>
+
+        <div id="result" class="mt-8 hidden animate-fade-in">
+            <div class="bg-white/80 rounded-2xl p-6 border border-indigo-100 shadow-inner">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="bg-green-100 text-green-600 p-2 rounded-full">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-900">Optimal Strategy Found</h2>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="bg-indigo-50/50 p-4 rounded-xl">
+                        <p class="text-sm text-gray-500 font-semibold uppercase tracking-wider mb-1">Recommended Cards</p>
+                        <p id="res-cards" class="text-lg font-bold text-indigo-900"></p>
+                    </div>
+                    <div class="bg-indigo-50/50 p-4 rounded-xl">
+                        <p class="text-sm text-gray-500 font-semibold uppercase tracking-wider mb-1">Transfer Partners</p>
+                        <p id="res-partners" class="text-lg font-bold text-indigo-900"></p>
+                    </div>
+                    <div class="bg-indigo-50/50 p-4 rounded-xl">
+                        <p class="text-sm text-gray-500 font-semibold uppercase tracking-wider mb-1">Sweet Spot Example</p>
+                        <p id="res-sweetspot" class="text-lg font-bold text-indigo-900"></p>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

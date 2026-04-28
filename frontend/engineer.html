@@ -4,30 +4,190 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Engineer Game View - Agent Swarm</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: monospace; background: #0f172a; color: #0f0; margin: 0; padding: 0; overflow: hidden; }
-        .nav { position: absolute; top: 1rem; left: 1rem; z-index: 100; }
-        .nav a { color: #fff; text-decoration: none; font-family: sans-serif; }
-        .dashboard { position: absolute; top: 1rem; right: 1rem; background: rgba(0,0,0,0.8); padding: 1rem; border: 1px solid #0f0; width: 300px; height: 90vh; overflow-y: auto; }
-        #canvas-container { width: 100vw; height: 100vh; position: relative; }
-        .agent { position: absolute; width: 20px; height: 20px; border-radius: 50%; background: #0f0; transition: all 0.5s ease; box-shadow: 0 0 10px #0f0; display: flex; justify-content: center; align-items: center; }
-        .agent::after { content: attr(data-id); position: absolute; top: -20px; color: #fff; font-size: 10px; }
-        .agent.supervisor { width: 40px; height: 40px; background: #f0f; box-shadow: 0 0 20px #f0f; top: 50%; left: 50%; transform: translate(-50%, -50%); }
-        .agent.thinking { animation: pulse 1s infinite; background: #ff0; box-shadow: 0 0 10px #ff0; }
-        .agent.dead { opacity: 0; transform: scale(0); }
-        .log { font-size: 10px; margin-bottom: 5px; border-bottom: 1px dashed #333; padding-bottom: 2px; }
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.5); } 100% { transform: scale(1); } }
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        body {
+            font-family: 'Share Tech Mono', monospace;
+            background-color: #0b0c10;
+            color: #66fcf1;
+            overflow: hidden;
+            background-image:
+                radial-gradient(circle at 50% 50%, #1f2833 1px, transparent 1px),
+                linear-gradient(to right, rgba(31, 40, 51, 0.5) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(31, 40, 51, 0.5) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+
+        .panel-glass {
+            background: rgba(11, 12, 16, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid #45a29e;
+            box-shadow: 0 0 15px rgba(69, 162, 158, 0.2);
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 0;
+        }
+
+        /* Agent Styling */
+        .agent {
+            position: absolute;
+            width: 32px;
+            height: 32px;
+            background: #1f2833;
+            border: 2px solid #45a29e;
+            border-radius: 4px;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 0 15px rgba(69, 162, 158, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .agent::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: #66fcf1;
+            border-radius: 50%;
+        }
+
+        .agent::after {
+            content: attr(data-id);
+            position: absolute;
+            bottom: -24px;
+            color: #c5c6c7;
+            font-size: 12px;
+            white-space: nowrap;
+            background: rgba(11, 12, 16, 0.8);
+            padding: 2px 6px;
+            border: 1px solid #1f2833;
+            border-radius: 3px;
+        }
+
+        .agent.supervisor {
+            width: 48px;
+            height: 48px;
+            border-color: #fca311;
+            box-shadow: 0 0 30px rgba(252, 163, 17, 0.4);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .agent.supervisor::before {
+            background: #fca311;
+            width: 20px;
+            height: 20px;
+        }
+
+        .agent.thinking {
+            animation: pulse-border 1.5s infinite;
+            border-color: #ff0055;
+            box-shadow: 0 0 20px rgba(255, 0, 85, 0.6);
+        }
+        .agent.thinking::before { background: #ff0055; }
+
+        .agent.dead {
+            opacity: 0;
+            transform: scale(0.1) rotate(45deg);
+            border-color: #ff0000;
+        }
+
+        @keyframes pulse-border {
+            0% { transform: scale(1); box-shadow: 0 0 10px rgba(255, 0, 85, 0.6); }
+            50% { transform: scale(1.15); box-shadow: 0 0 30px rgba(255, 0, 85, 1); }
+            100% { transform: scale(1); box-shadow: 0 0 10px rgba(255, 0, 85, 0.6); }
+        }
+
+        /* Log Styling */
+        .log-entry {
+            font-size: 12px;
+            margin-bottom: 6px;
+            border-left: 2px solid #45a29e;
+            padding-left: 8px;
+            animation: slide-in 0.3s ease-out;
+        }
+        .log-entry.thinking { border-left-color: #ff0055; color: #e8e8e8; }
+        .log-entry.spawn { border-left-color: #fca311; color: #fca311; }
+        .log-entry.die { border-left-color: #ff0000; color: #ff0000; text-decoration: line-through; }
+
+        @keyframes slide-in {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0b0c10; }
+        ::-webkit-scrollbar-thumb { background: #45a29e; border-radius: 3px; }
     </style>
 </head>
-<body>
-    <div class="nav"><a href="index.html">&larr; Back to User View</a></div>
-    <div id="canvas-container">
-        <!-- Agents will be dynamically added here -->
+<body class="text-sm">
+    <!-- Canvas Layer -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay -->
+    <div class="relative z-20 w-full h-full p-4 pointer-events-none flex flex-col justify-between">
+        <!-- Top Bar -->
+        <div class="flex justify-between items-start pointer-events-auto">
+            <!-- Left Side: Alliance Panel / Navigation -->
+            <div class="panel-glass rounded-lg p-4 w-64">
+                <h1 class="text-lg font-bold text-white mb-2 uppercase tracking-widest border-b border-[#45a29e] pb-2">Alliance Panel</h1>
+                <a href="index.html" class="flex items-center text-[#66fcf1] hover:text-white transition-colors py-2 text-xs">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                    RETURN TO USER VIEW
+                </a>
+                <div class="mt-4 pt-4 border-t border-[#45a29e]/30">
+                    <p class="text-xs text-[#c5c6c7] mb-1">NETWORK STATUS</p>
+                    <div class="flex items-center">
+                        <div class="w-2 h-2 rounded-full bg-[#66fcf1] animate-pulse mr-2"></div>
+                        <span id="conn-status" class="text-[#66fcf1]">CONNECTED</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side: Session Roster / System Logs -->
+            <div class="panel-glass rounded-lg w-96 h-[80vh] flex flex-col">
+                <div class="p-3 bg-[#1f2833] border-b border-[#45a29e] rounded-t-lg flex justify-between items-center">
+                    <h2 class="font-bold text-white tracking-widest text-xs">COMMAND CENTER</h2>
+                    <span class="text-[10px] text-[#45a29e] bg-[#0b0c10] px-2 py-1 rounded">LIVE FEED</span>
+                </div>
+                <div class="p-4 flex-1 overflow-y-auto" id="logs">
+                    <!-- Logs go here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar: Active Loops / Controls -->
+        <div class="flex justify-center pointer-events-auto">
+            <div class="panel-glass rounded-t-xl px-8 py-4 border-b-0 flex items-center gap-6">
+                <div>
+                    <p class="text-[10px] text-[#c5c6c7] uppercase">Active Agents</p>
+                    <p class="text-2xl font-bold text-white" id="agent-count">0</p>
+                </div>
+                <div class="h-8 w-px bg-[#45a29e]/50"></div>
+                <div>
+                    <p class="text-[10px] text-[#c5c6c7] uppercase">Nodes Explored</p>
+                    <p class="text-2xl font-bold text-white" id="node-count">0</p>
+                </div>
+                <div class="h-8 w-px bg-[#45a29e]/50"></div>
+                <div class="text-xs text-[#c5c6c7]">
+                    The <span class="text-[#fca311]">Supervisor</span> spawns <span class="text-[#66fcf1]">Search Agents</span>.<br>
+                    Agents evaluate points strategies in real-time.
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="dashboard">
-        <h3>System Logs</h3>
-        <div id="logs"></div>
-    </div>
+
     <script src="engineer.js"></script>
 </body>
 </html>
