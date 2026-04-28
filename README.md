@@ -27,3 +27,21 @@ For a deep dive into the architecture, the concept of "Generative UI", and how t
 ├── server/             # The Orchestrator WebSocket Server (Node.js/FastAPI)
 └── agents/             # The Python/JS Autonomous Agents and Supervisor logic
 ```
+
+## Running Locally
+
+To easily run the entire framework (Server, Frontend, and Agent Supervisor) locally, use the provided helper scripts.
+
+1. Ensure you have Node.js and Python 3 installed.
+2. Ensure you have installed the server dependencies (`cd server && npm install`) and agent dependencies (`pip install -r agents/requirements.txt`).
+3. Start the system:
+   ```bash
+   ./run.sh
+   ```
+4. Access the different views:
+   - **End User View**: http://localhost:3000
+   - **Engineer Game View**: http://localhost:3000/engineer.html
+5. To stop all background services, run:
+   ```bash
+   ./stop.sh
+   ```
