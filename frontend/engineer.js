@@ -1,91 +1,50 @@
 const ws = new WebSocket('ws://localhost:8080');
-const canvas = document.getElementById('canvas-container');
 const logs = document.getElementById('logs');
 const statusEl = document.getElementById('conn-status');
-const agentCountEl = document.getElementById('agent-count');
-const nodeCountEl = document.getElementById('node-count');
-
-const agents = {};
-let nodeCount = 0;
 
 function formatTime() {
     const d = new Date();
-    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`;
+    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}.${d.getMilliseconds().toString().padStart(3,'0')}`;
 }
 
-function addLog(msg, type = 'normal') {
+function addLog(agent, msg, colorClass = 'text-gray-400') {
     const div = document.createElement('div');
-    div.className = `log-entry ${type}`;
-    div.innerHTML = `<span class="text-[#45a29e] mr-2">[${formatTime()}]</span> ${msg}`;
+    div.innerHTML = `<span class="text-gray-600">[${formatTime()}]</span> <span class="font-bold ${colorClass}">${agent}</span>: ${msg}`;
     logs.prepend(div);
 }
 
-function updateStats() {
-    agentCountEl.textContent = Object.keys(agents).length;
-    nodeCountEl.textContent = nodeCount;
-}
-
-function createAgentNode(id, isSupervisor = false) {
-    if (agents[id]) return;
-
-    const node = document.createElement('div');
-    node.className = `agent ${isSupervisor ? 'supervisor' : ''}`;
-    node.setAttribute('data-id', id);
-
-    if (!isSupervisor) {
-        // Random position around the center, bounded to viewport
-        const angle = Math.random() * Math.PI * 2;
-        // Keep it mostly within the visible area but away from the supervisor
-        const radius = 150 + Math.random() * (Math.min(window.innerWidth, window.innerHeight) / 3);
-        const x = window.innerWidth / 2 + Math.cos(angle) * radius;
-        const y = window.innerHeight / 2 + Math.sin(angle) * radius;
-        node.style.left = `${x}px`;
-        node.style.top = `${y}px`;
-    }
-
-    canvas.appendChild(node);
-    agents[id] = node;
-    updateStats();
-}
-
-function updateAgentState(id, state) {
-    const node = agents[id];
-    if (!node) return;
-
-    if (state === 'THINKING') {
-        node.classList.add('thinking');
-        nodeCount++;
-        updateStats();
-    } else {
-        node.classList.remove('thinking');
-    }
-}
-
-function removeAgentNode(id) {
-    const node = agents[id];
-    if (!node) return;
-
-    node.classList.add('dead');
+function triggerGlow(elementId, duration = 1500) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    el.classList.add('active-glow');
+    el.style.opacity = '1';
     setTimeout(() => {
-        if (canvas.contains(node)) canvas.removeChild(node);
-        delete agents[id];
-        updateStats();
-    }, 500);
+        el.classList.remove('active-glow');
+        if(elementId.startsWith('agent-') && elementId !== 'agent-Summoner') {
+            el.style.opacity = '0.5';
+        }
+    }, duration);
+}
+
+function activateSkill(skillName) {
+    const el = document.getElementById(`skill-${skillName}`);
+    if (!el) return;
+    el.classList.add('active');
+    setTimeout(() => {
+        el.classList.remove('active');
+    }, 2000);
 }
 
 ws.onopen = () => {
-    statusEl.textContent = 'CONNECTED';
-    statusEl.classList.add('text-[#66fcf1]');
-    statusEl.classList.remove('text-[#ff0000]');
-    addLog('SYSTEM: Initialized connection to Mainframe.', 'spawn');
-    createAgentNode('Supervisor', true);
+    statusEl.textContent = '● CONNECTED';
+    statusEl.className = 'text-green-500 anim-flash';
+    addLog('SYSTEM', 'WebSocket connected to Orchestrator Core.', 'text-green-500');
 };
 
 ws.onclose = () => {
-    statusEl.textContent = 'DISCONNECTED';
-    statusEl.classList.remove('text-[#66fcf1]');
-    statusEl.classList.add('text-[#ff0000]');
-    addLog('SYSTEM: Connection to Mainframe lost.', 'die');
+    statusEl.textContent = '○ DISCONNECTED';
+    statusEl.className = 'text-red-500';
+    addLog('SYSTEM', 'Connection lost.', 'text-red-500');
 };
 
 ws.onmessage = (event) => {
@@ -93,29 +52,46 @@ ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
         const type = payload.type;
         const data = payload.data;
-        const agentId = payload.agentId || 'Supervisor';
+        const agentId = payload.agentId || 'Summoner';
+
+        // Color mapping for logs
+        const colors = {
+            'Summoner': 'text-[#10b981]',
+            'Scout': 'text-[#3b82f6]',
+            'Analyst': 'text-[#8b5cf6]',
+            'Executor': 'text-[#10b981]',
+            'Auditor': 'text-[#f59e0b]'
+        };
+        const c = colors[agentId] || 'text-gray-300';
 
         if (type === 'USER_GOAL') {
-            addLog(`INCOMING DIRECTIVE: ${data.goal}`);
-            updateAgentState('Supervisor', 'THINKING');
+            addLog('SYSTEM', `New Directve: ${data.goal}`, 'text-white');
+            triggerGlow('agent-Summoner', 3000);
+            document.getElementById('Summoner-status').textContent = 'PROCESSING DIRECTIVE';
         } else if (type === 'SPAWN') {
-            createAgentNode(agentId);
-            addLog(`Agent [${agentId}] spawned into grid.`, 'spawn');
+            triggerGlow(`agent-${agentId}`, 2000);
+            addLog(agentId, `Instantiated. Role: ${data.role}`, c);
         } else if (type === 'THINKING') {
-            updateAgentState(agentId, 'THINKING');
-            addLog(`[${agentId}] Calculating: ${data.thought}`, 'thinking');
-        } else if (type === 'TOOL_CALL') {
-            updateAgentState(agentId, 'NORMAL');
-            addLog(`[${agentId}] Querying database: ${data.tool}`);
+            triggerGlow(`agent-${agentId}`, 1000);
+            addLog(agentId, data.thought, c);
+            if(agentId === 'Summoner') document.getElementById('Summoner-status').textContent = data.thought;
+        } else if (type === 'SKILL_USE') {
+            activateSkill(data.skill);
+            addLog(agentId, `Using skill: [${data.skill}]`, c);
+        } else if (type === 'MEMORY_ACCESS') {
+            triggerGlow('hub-Memory', 2000);
+            addLog('CORAL_HUB', data.action, 'text-[#b45309]');
+        } else if (type === 'SELF_IMPROVEMENT') {
+            triggerGlow('hub-Improve', 3000);
+            addLog('MUTATION_ENGINE', data.action, 'text-[#4d7c0f]');
         } else if (type === 'RESULT') {
-            updateAgentState(agentId, 'NORMAL');
-            addLog(`[${agentId}] Found strategy (Score: ${data.strategy?.score || 'N/A'})`);
+            addLog(agentId, `Task Complete. XP Gained: ${data.xp_gained}`, c);
         } else if (type === 'DIE') {
-            removeAgentNode(agentId);
-            addLog(`[${agentId}] Despawned. Thread terminated.`, 'die');
+            addLog(agentId, data.message, 'text-gray-500');
         } else if (type === 'FINAL_RESULT') {
-            updateAgentState('Supervisor', 'NORMAL');
-            addLog(`[Supervisor] Optimum strategy compiled. Output delivered.`, 'spawn');
+            triggerGlow('agent-Summoner', 3000);
+            document.getElementById('Summoner-status').textContent = 'STRATEGY DEPLOYED. IDLE.';
+            addLog('Summoner', `Final strategy compiled. Score: ${data.strategy.score}`, colors['Summoner']);
         }
     } catch(e) {}
 };

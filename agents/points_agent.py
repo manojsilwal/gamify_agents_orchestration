@@ -10,7 +10,14 @@ CARDS = ["Amex Gold", "Chase Sapphire Preferred", "Capital One Venture X", "Bilt
 AIRLINES = ["United Airlines", "Delta SkyMiles", "American Airlines", "Air Canada Aeroplan", "Virgin Atlantic"]
 HOTELS = ["Hyatt", "Marriott", "Hilton", "IHG"]
 
-async def send_event(websocket, type, data, agentId="Supervisor"):
+AGENTS_METADATA = {
+    "Scout": {"role": "Data Recon", "level": 3, "xp": 240, "skills": ["ListingCrawl", "PriceCalc"]},
+    "Analyst": {"role": "Market Intel", "level": 5, "xp": 380, "skills": ["TrendAnalysis"]},
+    "Executor": {"role": "Reports & Actions", "level": 4, "xp": 290, "skills": ["ReportGen"]},
+    "Auditor": {"role": "QA & Risk", "level": 2, "xp": 90, "skills": ["RiskAssess"]}
+}
+
+async def send_event(websocket, type, data, agentId="Summoner"):
     event = {
         "type": type,
         "data": data,
@@ -19,40 +26,33 @@ async def send_event(websocket, type, data, agentId="Supervisor"):
     }
     await websocket.send(json.dumps(event))
 
-def generate_random_strategy(goal):
-    cards = random.sample(CARDS, 2)
-    airline = random.choice(AIRLINES)
-    hotel = random.choice(HOTELS)
-    score = random.randint(50, 100)
-    return {
-        "recommended_cards": cards,
-        "primary_spend_categories": ["Dining", "Travel"],
-        "target_transfer_partners": [airline, hotel],
-        "sweet_spot_example": f"Based on '{goal[:20]}...': Transfer points to {airline} for {random.randint(40, 80)}k points. Transfer to {hotel} for luxury stays.",
-        "score": score
-    }
+async def specialized_agent(ws, agent_name, goal):
+    meta = AGENTS_METADATA[agent_name]
+    await send_event(ws, "SPAWN", {"role": meta["role"], "level": meta["level"], "xp": meta["xp"]}, agent_name)
+    await asyncio.sleep(random.uniform(0.5, 1.0))
 
-async def worker_agent(goal, worker_id):
-    async with websockets.connect(SERVER_URL) as ws:
-        await send_event(ws, "SPAWN", {"message": f"Worker {worker_id} online"}, worker_id)
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+    # Simulate Skill Usage
+    skill = random.choice(meta["skills"])
+    await send_event(ws, "SKILL_USE", {"skill": skill, "action": f"Executing {skill} protocol"}, agent_name)
+    await send_event(ws, "THINKING", {"thought": f"Applying {skill} to user goal"}, agent_name)
+    await asyncio.sleep(random.uniform(1.0, 2.0))
 
-        await send_event(ws, "THINKING", {"thought": f"Analyzing combination for goal"}, worker_id)
-        await asyncio.sleep(random.uniform(1.0, 2.5))
+    # Simulate Tool Call
+    await send_event(ws, "TOOL_CALL", {"tool": f"{skill}_API"}, agent_name)
+    await asyncio.sleep(random.uniform(0.5, 1.0))
 
-        strategy = generate_random_strategy(goal)
-        await send_event(ws, "TOOL_CALL", {"tool": "evaluate_strategy"}, worker_id)
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+    # Return partial result
+    await send_event(ws, "RESULT", {"status": "Complete", "xp_gained": random.randint(10, 50)}, agent_name)
+    await asyncio.sleep(0.5)
 
-        await send_event(ws, "RESULT", {"strategy": strategy}, worker_id)
-        await asyncio.sleep(0.5)
+    # Agent dies/sleeps
+    await send_event(ws, "DIE", {"message": "Task complete. Entering hibernation."}, agent_name)
 
-        await send_event(ws, "DIE", {"message": "Task complete"}, worker_id)
-        return strategy
+    return {"agent": agent_name, "contribution": f"{agent_name} data collected"}
 
 async def supervisor_loop():
     async with websockets.connect(SERVER_URL) as ws:
-        print("Supervisor online, waiting for User Goals...")
+        print("Summoner online, waiting for User Goals...")
         while True:
             try:
                 message = await ws.recv()
@@ -69,22 +69,39 @@ async def supervisor_loop():
             if data.get("type") == "USER_GOAL":
                 goal = data["data"]["goal"]
                 print(f"Received Goal: {goal}")
-                await send_event(ws, "THINKING", {"thought": "Decomposing goal into tasks for worker swarm..."})
+                await send_event(ws, "THINKING", {"thought": "Routing tasks • monitoring state • injecting shared context"})
 
-                # Spawn 3-5 workers to evaluate different combinations concurrently
-                num_workers = random.randint(3, 5)
-                tasks = []
-                for i in range(num_workers):
-                    worker_id = f"Worker-{random.randint(1000,9999)}"
-                    tasks.append(worker_agent(goal, worker_id))
+                # CORAL Memory access
+                await send_event(ws, "MEMORY_ACCESS", {"action": "Retrieving historical attempts from CORAL SQLite"}, "Summoner")
+                await asyncio.sleep(0.5)
 
-                # Wait for all workers to finish
-                results = await asyncio.gather(*tasks)
+                # Execute agents in sequence/parallel
+                tasks = [
+                    specialized_agent(ws, "Scout", goal),
+                    specialized_agent(ws, "Analyst", goal)
+                ]
+                await asyncio.gather(*tasks)
 
-                # Supervisor evaluates the best result
-                best_strategy = max(results, key=lambda x: x["score"])
+                await specialized_agent(ws, "Executor", goal)
+                await specialized_agent(ws, "Auditor", goal)
 
-                await send_event(ws, "THINKING", {"thought": f"All workers finished. Selected best strategy with score {best_strategy['score']}"})
+                # Self-Improvement Loop Trigger
+                await send_event(ws, "SELF_IMPROVEMENT", {"action": "Nightly reflection • Prompt evolution • A-Evolve pattern"}, "Summoner")
+
+                # Final result generation
+                cards = random.sample(CARDS, 2)
+                airline = random.choice(AIRLINES)
+                hotel = random.choice(HOTELS)
+
+                best_strategy = {
+                    "recommended_cards": cards,
+                    "primary_spend_categories": ["Dining", "Travel"],
+                    "target_transfer_partners": [airline, hotel],
+                    "sweet_spot_example": f"Transfer to {airline} to fly first class. Book {hotel} for stay.",
+                    "score": random.randint(85, 99)
+                }
+
+                await send_event(ws, "THINKING", {"thought": f"All agents finished. Compiling final strategy."})
                 await asyncio.sleep(1)
 
                 await send_event(ws, "FINAL_RESULT", {"strategy": best_strategy})
