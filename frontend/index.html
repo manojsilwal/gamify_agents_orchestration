@@ -1,47 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Points Optimizer - End User</title>
-    <style>
-        body { font-family: sans-serif; background: #f0f4f8; margin: 0; padding: 2rem; color: #333; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { margin-top: 0; color: #1e3a8a; }
-        .form-group { margin-bottom: 1.5rem; }
-        label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
-        input[type="text"] { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem; }
-        button:hover { background: #2563eb; }
-        #status { font-size: 0.9rem; margin-top: 1rem; color: #6b7280; }
-        .result-box { margin-top: 2rem; padding: 1.5rem; background: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 4px; display: none; }
-        .result-box h2 { margin-top: 0; font-size: 1.25rem; }
-        .cards { font-weight: bold; color: #0369a1; }
-        .nav { margin-bottom: 1rem; text-align: right; }
-        .nav a { color: #3b82f6; text-decoration: none; font-size: 0.9rem; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="nav"><a href="engineer.html">Go to Engineer Dashboard &rarr;</a></div>
-        <h1>Travel Points Optimizer</h1>
-        <p>Tell us your travel goals, and our AI agents will find the best credit card and points transfer combinations for you.</p>
-
-        <div class="form-group">
-            <label for="goal">What is your travel goal?</label>
-            <input type="text" id="goal" placeholder="e.g., Business class to Japan for two people staying at luxury hotels">
-        </div>
-        <button id="searchBtn">Find Best Strategy</button>
-        <div id="status">Ready</div>
-
-        <div id="result" class="result-box">
-            <h2>Optimal Strategy Found!</h2>
-            <p><strong>Recommended Cards:</strong> <span id="res-cards" class="cards"></span></p>
-            <p><strong>Transfer Partners:</strong> <span id="res-partners"></span></p>
-            <p><strong>Sweet Spot:</strong> <span id="res-sweetspot"></span></p>
-        </div>
-    </div>
-
-    <script src="user.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
