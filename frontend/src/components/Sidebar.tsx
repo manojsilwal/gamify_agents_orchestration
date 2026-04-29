@@ -5,6 +5,7 @@ const navItems = [
     { icon: 'account_balance_wallet', label: 'Portfolio', to: '/portfolio' },
     { icon: 'auto_graph', label: 'Optimization', to: '/optimization' },
     { icon: 'receipt_long', label: 'History', to: '/history' },
+    { icon: 'memory', label: 'Agentic Flow', to: '/agentic-flow' },
 ];
 
 export function Sidebar() {

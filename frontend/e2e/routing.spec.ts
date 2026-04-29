@@ -18,4 +18,8 @@ test('has sidebar navigation and routes correctly', async ({ page }) => {
   // Navigate to History
   await page.getByRole('link', { name: 'History' }).click();
   await expect(page.getByRole('heading', { name: 'Transaction History' })).toBeVisible();
+
+  // Navigate to Agentic Flow
+  await page.getByRole('link', { name: 'Agentic Flow' }).click();
+  await expect(page.getByRole('heading', { name: 'Autonomous UI Grader' })).toBeVisible();
 });

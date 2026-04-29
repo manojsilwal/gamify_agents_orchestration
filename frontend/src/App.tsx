@@ -5,6 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Portfolio } from './pages/Portfolio';
 import { Optimization } from './pages/Optimization';
 import { History } from './pages/History';
+import { AgenticFlow } from './pages/AgenticFlow';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/optimization" element={<Optimization />} />
             <Route path="/history" element={<History />} />
+            <Route path="/agentic-flow" element={<AgenticFlow />} />
           </Routes>
         </main>
       </div>
