@@ -18,8 +18,8 @@ export function TopNav() {
                     <button className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors opacity-80 hover:opacity-100 duration-200">
                         <span className="material-symbols-outlined">settings</span>
                     </button>
-                    <div className="w-8 h-8 rounded-full bg-slate-200 overflow-hidden border border-outline-variant ml-2 flex items-center justify-center">
-                        <span className="material-symbols-outlined text-slate-500">person</span>
+                    <div className="w-8 h-8 rounded-full overflow-hidden border border-outline-variant ml-2">
+                        <img alt="User profile" className="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDyEL93ek1cB82xv94Qpp4cxnzKqTtDP8PrM4nias0Y8jOCoWmAziXMZkZ-8mIzNhS-VxG8C3WLPbjml9g4_EJA3yBJeJRgqf4_fExQgVBfYKv5T9AdUfZbdCwWvcgvVe6ec4baF92G--dGoGppKSf9k40ALafQ1fjJW_3dLnCeXDk74uboIAqHUPtSYZFQKU7jbIck50mUdCpaoAkUm_FDpNmfkMEnvVvkOPFysI2g9Pkax9dbhTlkhzuGDq0fXmaqRiGXgwng88K7"/>
                     </div>
                 </div>
             </div>
