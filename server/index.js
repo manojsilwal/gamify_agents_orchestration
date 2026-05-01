@@ -40,11 +40,26 @@ wss.on('connection', function connection(ws) {
 async function handleGeminiProxy(ws, payload) {
     const { correlationId, apiKey, requestBody } = payload.data;
 
+    // Use the explicitly provided key, or fallback to the local server environment variable
+    const activeKey = apiKey || process.env.GEMINI_API_KEY;
+
+    if (!activeKey) {
+        ws.send(JSON.stringify({
+            type: 'GEMINI_PROXY_RESPONSE',
+            data: {
+                correlationId,
+                success: false,
+                error: { error: { message: "No GEMINI_API_KEY provided in frontend or server environment." } }
+            }
+        }));
+        return;
+    }
+
     // Using gemini-3.1-pro as requested by user
     const options = {
         hostname: 'generativelanguage.googleapis.com',
         port: 443,
-        path: `/v1beta/models/gemini-3.1-pro:generateContent?key=${apiKey}`,
+        path: `/v1beta/models/gemini-3.1-pro:generateContent?key=${activeKey}`,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
