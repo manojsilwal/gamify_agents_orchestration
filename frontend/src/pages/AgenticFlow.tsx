@@ -60,21 +60,55 @@ const MAX_ITER = 8;
 // ══════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════
-async function callClaude(sys: string, user: string, apiKey: string, maxTokens = 1200) {
+async function callGemini(sys: string, user: string, apiKey: string) {
   if (!apiKey) throw new Error("No API Key provided.");
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
-    },
-    body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, system: sys, messages: [{ role: "user", content: user }] }),
+
+  return new Promise<string>((resolve, reject) => {
+    const socket = new WebSocket("ws://localhost:8080");
+    const correlationId = Math.random().toString(36).substring(7);
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({
+        type: 'GEMINI_PROXY_REQUEST',
+        data: {
+          correlationId,
+          apiKey,
+          requestBody: {
+            systemInstruction: { parts: [{ text: sys }] },
+            contents: [{ parts: [{ text: user }] }]
+          }
+        }
+      }));
+    };
+
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'GEMINI_PROXY_RESPONSE' && message.data.correlationId === correlationId) {
+        socket.close();
+        if (message.data.success) {
+          try {
+            resolve(message.data.body.candidates[0].content.parts[0].text);
+          } catch(e) {
+            reject(new Error("Failed to parse Gemini response text"));
+          }
+        } else {
+          reject(new Error(message.data.error?.error?.message || "API Error"));
+        }
+      }
+    };
+
+    socket.onerror = (err) => {
+      socket.close();
+      reject(err);
+    };
+
+    setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.close();
+            reject(new Error("Timeout waiting for gemini proxy"));
+        }
+    }, 60000);
   });
-  const d = await res.json();
-  if (d.error) throw new Error(d.error.message || "API Error");
-  return d.content?.find((b: any) => b.type === "text")?.text || "";
 }
 
 function parseJSON(raw: string) {
@@ -151,7 +185,7 @@ function RadarViz({ iterations }: { iterations: any[] }) {
 export function AgenticFlow() {
   const [apiKey, setApiKey] = useState("");
   useEffect(() => {
-      const storedKey = localStorage.getItem("anthropic_key");
+      const storedKey = localStorage.getItem("gemini_key");
       if (storedKey) setApiKey(storedKey);
   }, []);
 
@@ -172,7 +206,7 @@ export function AgenticFlow() {
 
   const saveApiKey = (k: string) => {
       setApiKey(k);
-      localStorage.setItem("anthropic_key", k);
+      localStorage.setItem("gemini_key", k);
   };
 
   const log = useCallback((msg: string, type = "info") => {
@@ -183,7 +217,7 @@ export function AgenticFlow() {
     setAgentStatus(p => ({ ...p, [agent.id]: "thinking" }));
     log(`${agent.avatar} ${agent.name} scoring...`, "agent");
     try {
-      const raw = await callClaude(agent.sys, agent.prompt(code), apiKey);
+      const raw = await callGemini(agent.sys, agent.prompt(code), apiKey);
       const parsed = parseJSON(raw) || { score: 5, issues: [], strengths: [], topFix: "" };
       const score = Math.max(1, Math.min(10, Number(parsed.score) || 5));
       const result = { ...parsed, score, agentId: agent.id };
@@ -253,11 +287,10 @@ export function AgenticFlow() {
       }).join("\n\n");
 
       try {
-        const improved = await callClaude(
+        const improved = await callGemini(
           CODER_SYS,
           `Code to improve:\n\`\`\`\n${code}\n\`\`\`\n\nExpert agent feedback:\n${feedbackBlock}\n\nRewrite code fixing all issues. Return ONLY the improved code.`,
-          apiKey,
-          2000
+          apiKey
         );
         code = improved.replace(/```jsx?|```tsx?|```/g, "").trim() || code;
         setCurrentCode(code);

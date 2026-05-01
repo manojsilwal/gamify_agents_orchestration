@@ -3,93 +3,163 @@ import websockets
 import json
 import time
 import random
-import requests
-from bs4 import BeautifulSoup
 
 SERVER_URL = "ws://localhost:8080"
 
-CARDS = ["Chase Sapphire Reserve", "Amex Platinum", "Capital One Venture X", "Citi Premier"]
-AIRLINES = ["United Airlines", "Delta Airlines", "American Airlines", "Air France"]
-HOTELS = ["Hyatt", "Marriott", "Hilton", "IHG"]
-
-def scrape_valuations():
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    try:
-        # Get Airline/Hotel valuations
-        r = requests.get('https://thepointsguy.com/guide/monthly-valuations/', headers=headers)
-        soup = BeautifulSoup(r.text, 'html.parser')
-
-        valuations = []
-        for tr in soup.find_all('tr'):
-            tds = tr.find_all('td')
-            if len(tds) >= 2:
-                program = tds[0].text.strip()
-                value = tds[1].text.strip()
-                if program and value and 'cents' in value:
-                    valuations.append({"program": program, "value": value})
-
-        # Get Crypto Valuation just to show another source
-        crypto_r = requests.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd')
-        if crypto_r.status_code == 200:
-            btc_price = crypto_r.json().get('bitcoin', {}).get('usd', 0)
-            if btc_price:
-                 valuations.append({"program": "Bitcoin", "value": f"${btc_price}"})
-
-        if not valuations:
-            return [{"program": "Fallback Airlines", "value": "1.5 cents"}]
-
-        return valuations[:10] # limit to top 10
-    except Exception as e:
-        print(f"Scraping error: {e}")
-        return [{"program": "Fallback Network", "value": "1.0 cents"}]
-
-AGENTS_METADATA = {
-    "Scout": {"role": "Data Recon", "level": 3, "xp": 240, "skills": ["ListingCrawl", "PriceCalc"]},
-    "Analyst": {"role": "Market Intel", "level": 5, "xp": 380, "skills": ["TrendAnalysis"]},
-    "Executor": {"role": "Reports & Actions", "level": 4, "xp": 290, "skills": ["ReportGen"]},
-    "Auditor": {"role": "QA & Risk", "level": 2, "xp": 90, "skills": ["RiskAssess"]}
+dashboard_data = {
+    "total_value": 1248500,
+    "cash_equivalent": 18727.50,
+    "ytd_growth": 12.4,
+    "categories": [
+        {"name": "Travel", "percent": 65},
+        {"name": "Dining", "percent": 22},
+        {"name": "Shopping", "percent": 13}
+    ],
+    "transactions": [
+        {"date": "Oct 24, 2023", "merchant": "Marriott Bonvoy Boundless", "category": "Sign-up Bonus", "amount": "$4,000.00", "yield": "+100,000"},
+        {"date": "Oct 22, 2023", "merchant": "Delta Airlines Flight 482", "category": "Travel (3x)", "amount": "$450.00", "yield": "+1,350"},
+        {"date": "Oct 20, 2023", "merchant": "Le Bernardin", "category": "Dining (4x)", "amount": "$320.00", "yield": "+1,280"}
+    ],
+    "valuations": []
 }
 
-async def send_event(websocket, type, data, agentId="Summoner"):
+portfolio_data = {
+    "total_valuation": 42850.00,
+    "programs": 8,
+    "expiring_soon": "45k",
+    "accounts": [
+        {
+            "id": 1,
+            "name": "Delta SkyMiles",
+            "type": "Airline",
+            "balance": "452,000",
+            "value": "$5,424",
+            "level": "Platinum Medallion",
+            "expiration": "15,000 pts · 30 Days",
+            "icon": "flight_takeoff",
+            "status_color": "error"
+        },
+        {
+            "id": 2,
+            "name": "Marriott Bonvoy",
+            "type": "Hotel",
+            "balance": "850,500",
+            "value": "$6,804",
+            "level": "Titanium Elite",
+            "expiration": "None (Active)",
+            "icon": "hotel",
+            "status_color": "primary"
+        },
+        {
+            "id": 3,
+            "name": "Chase Ultimate Rewards",
+            "type": "Credit Card Transferable",
+            "balance": "1,200,000",
+            "value": "$24,000",
+            "level": "Sapphire Reserve",
+            "expiration": "Points never expire",
+            "icon": "credit_card",
+            "status_color": "primary"
+        },
+        {
+            "id": 4,
+            "name": "United MileagePlus",
+            "type": "Airline",
+            "balance": "120,400",
+            "value": "$1,444",
+            "level": "Premier Gold",
+            "expiration": "Points never expire",
+            "icon": "flight",
+            "status_color": "warning"
+        }
+    ]
+}
+
+def get_live_valuations():
+    # Use hardcoded realistic valuations that slightly fluctuate to simulate a live market
+    base_valuations = [
+        {"program": "Chase Ultimate Rewards", "base": 2.05},
+        {"program": "Amex Membership Rewards", "base": 2.0},
+        {"program": "Bilt Rewards", "base": 2.05},
+        {"program": "Capital One Miles", "base": 1.85},
+        {"program": "Citi ThankYou Points", "base": 1.8},
+        {"program": "Delta SkyMiles", "base": 1.2},
+        {"program": "United MileagePlus", "base": 1.4},
+        {"program": "Marriott Bonvoy", "base": 0.84},
+        {"program": "Hilton Honors", "base": 0.6},
+        {"program": "World of Hyatt", "base": 1.7}
+    ]
+
+    valuations = []
+    for v in base_valuations:
+        # Add tiny random fluctuation (-0.02 to +0.02)
+        fluc = random.uniform(-0.02, 0.02)
+        val = max(0.1, v["base"] + fluc)
+        valuations.append({"program": v["program"], "value": f"{val:.2f} cents"})
+    return valuations
+
+async def send_event(websocket, event_type, data, agent_id="System"):
     event = {
-        "type": type,
+        "type": event_type,
         "data": data,
-        "agentId": agentId,
+        "agentId": agent_id,
         "timestamp": time.time()
     }
-    await websocket.send(json.dumps(event))
+    try:
+        await websocket.send(json.dumps(event))
+    except Exception as e:
+        print(f"Send error: {e}")
 
-async def specialized_agent(ws, agent_name, goal):
-    meta = AGENTS_METADATA[agent_name]
-    await send_event(ws, "SPAWN", {"role": meta["role"], "level": meta["level"], "xp": meta["xp"]}, agent_name)
-    await asyncio.sleep(random.uniform(0.5, 1.0))
+async def background_live_push(ws):
+    while True:
+        try:
+            live_data = get_live_valuations()
+            dashboard_data["valuations"] = live_data
 
-    if agent_name == "Scout":
-        await send_event(ws, "THINKING", {"thought": f"Scraping live valuations..."}, agent_name)
-        live_data = scrape_valuations()
-        await send_event(ws, "TOOL_CALL", {"tool": "scrape_points_guy", "input": "monthly-valuations"}, agent_name)
-        await asyncio.sleep(0.5)
+            # Simulate point growth
+            dashboard_data["total_value"] += random.randint(10, 50)
+            dashboard_data["cash_equivalent"] += random.uniform(0.1, 0.5)
 
-    # Simulate Skill Usage
-    skill = random.choice(meta["skills"])
-    await send_event(ws, "SKILL_USE", {"skill": skill, "action": f"Executing {skill} protocol"}, agent_name)
-    await send_event(ws, "THINKING", {"thought": f"Applying {skill} to user goal"}, agent_name)
-    await asyncio.sleep(random.uniform(1.0, 2.0))
+            # Broadcast the live dashboard and portfolio data
+            await send_event(ws, "ZENITH_DATA_UPDATE", {
+                "dashboard": dashboard_data,
+                "portfolio": portfolio_data
+            })
+        except Exception as e:
+            print("Background push error", e)
+        await asyncio.sleep(5)
 
-    # Return partial result
-    await send_event(ws, "RESULT", {"status": "Complete", "xp_gained": random.randint(10, 50)}, agent_name)
-    await asyncio.sleep(0.5)
+async def handle_calculations(ws, goal_data):
+    amount = float(goal_data.get("amount", 50000))
+    source = goal_data.get("source", "Zenith Ultimate Rewards")
+    dest = goal_data.get("destination", "Global Airlines Alliance")
 
-    # Agent dies/sleeps
-    await send_event(ws, "DIE", {"message": "Task complete. Entering hibernation."}, agent_name)
+    await send_event(ws, "THINKING", {"thought": f"Calculating optimization for {amount} points from {source} to {dest}..."}, "Optimizer")
+    await asyncio.sleep(1.0)
 
-    return {"agent": agent_name, "contribution": f"{agent_name} data collected"}
+    ratio_multiplier = 1.0
+    if "Airlines" in dest:
+        ratio_multiplier = 1.5
+    elif "Hotel" in dest:
+        ratio_multiplier = 2.0
+
+    ratio = f"1 : {int(1 * ratio_multiplier)}"
+    bonus = "+30% Promo" if "Airlines" in dest else "-"
+    cpp_val = 2.4 if "Airlines" in dest else 1.8
+    cpp = f"{cpp_val} cpp"
+
+    result = {
+        "path": dest,
+        "ratio": ratio,
+        "bonus": bonus,
+        "yieldValue": cpp
+    }
+
+    await send_event(ws, "OPTIMIZATION_RESULT", {"result": result}, "Optimizer")
 
 async def supervisor_loop():
     async with websockets.connect(SERVER_URL) as ws:
-        print("Summoner online, waiting for User Goals...")
-
-        # Also periodically push data even without goals so Dashboard has live data
+        print("Zenith Backend online, connected to WS Server.")
         asyncio.create_task(background_live_push(ws))
 
         while True:
@@ -99,60 +169,14 @@ async def supervisor_loop():
             except Exception as e:
                 continue
 
-            if data.get("type") == "USER_GOAL":
-                goal = data["data"]["goal"]
-                print(f"Received Goal: {goal}")
-                await send_event(ws, "THINKING", {"thought": "Routing tasks • monitoring state • injecting shared context"})
+            if data.get("type") == "CALCULATE_OPTIMIZATION":
+                await handle_calculations(ws, data["data"])
 
-                # CORAL Memory access
-                await send_event(ws, "MEMORY_ACCESS", {"action": "Retrieving historical attempts from CORAL SQLite"}, "Summoner")
-                await asyncio.sleep(0.5)
-
-                # Execute agents in sequence/parallel
-                tasks = [
-                    specialized_agent(ws, "Scout", goal),
-                    specialized_agent(ws, "Analyst", goal)
-                ]
-                await asyncio.gather(*tasks)
-
-                await specialized_agent(ws, "Executor", goal)
-                await specialized_agent(ws, "Auditor", goal)
-
-                # Self-Improvement Loop Trigger
-                await send_event(ws, "SELF_IMPROVEMENT", {"action": "Nightly reflection • Prompt evolution • A-Evolve pattern"}, "Summoner")
-
-                live_data = scrape_valuations()
-
-                # Determine best value program
-                # Just pick the first non-crypto one as a naive selection
-                best_program = "Unknown"
-                for v in live_data:
-                    if "Bitcoin" not in v['program']:
-                        best_program = v['program']
-                        break
-
-                best_strategy = {
-                    "recommended_cards": [f"Card tied to {best_program}", "General Travel Card"],
-                    "primary_spend_categories": ["Dining", "Travel"],
-                    "target_transfer_partners": [v['program'] for v in live_data[:3]],
-                    "sweet_spot_example": f"Transfer to {best_program} based on live scraped data showing high yield.",
-                    "score": random.randint(85, 99),
-                    "live_valuations": live_data
-                }
-
-                await send_event(ws, "THINKING", {"thought": f"All agents finished. Compiling final strategy."})
-                await asyncio.sleep(1)
-
-                await send_event(ws, "FINAL_RESULT", {"strategy": best_strategy})
-
-async def background_live_push(ws):
-    while True:
-        try:
-            live_data = scrape_valuations()
-            await send_event(ws, "LIVE_DATA_UPDATE", {"valuations": live_data})
-        except Exception as e:
-            print("Background push error", e)
-        await asyncio.sleep(30) # Push every 30 seconds
+            if data.get("type") == "REQUEST_ZENITH_DATA":
+                await send_event(ws, "ZENITH_DATA_UPDATE", {
+                    "dashboard": dashboard_data,
+                    "portfolio": portfolio_data
+                })
 
 if __name__ == "__main__":
     for i in range(5):
