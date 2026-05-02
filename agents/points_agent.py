@@ -137,15 +137,24 @@ async def handle_calculations(ws, goal_data):
     await send_event(ws, "THINKING", {"thought": f"Calculating optimization for {amount} points from {source} to {dest}..."}, "Optimizer")
     await asyncio.sleep(1.0)
 
+    # Base calculation
     ratio_multiplier = 1.0
+    bonus = "-"
+    cpp_val = 1.8
+
     if "Airlines" in dest:
         ratio_multiplier = 1.5
+        bonus = "+30% Promo"
+        cpp_val = 2.4
     elif "Hotel" in dest:
         ratio_multiplier = 2.0
+    elif "Star Alliance" in dest and "Air Canada" in source:
+        # Ultimate MVP specific path
+        ratio_multiplier = 1.0
+        bonus = "Partner Sweet Spot"
+        cpp_val = 4.2 # extremely high yield
 
-    ratio = f"1 : {int(1 * ratio_multiplier)}"
-    bonus = "+30% Promo" if "Airlines" in dest else "-"
-    cpp_val = 2.4 if "Airlines" in dest else 1.8
+    ratio = f"1 : {int(1 * ratio_multiplier)}" if ratio_multiplier >= 1.0 else f"{int(1/ratio_multiplier)} : 1"
     cpp = f"{cpp_val} cpp"
 
     result = {
@@ -171,6 +180,36 @@ async def supervisor_loop():
 
             if data.get("type") == "CALCULATE_OPTIMIZATION":
                 await handle_calculations(ws, data["data"])
+
+            if data.get("type") == "LINK_ACCOUNT":
+                provider = data["data"].get("provider")
+                print(f"Linking account for {provider}...")
+                await asyncio.sleep(1.0) # simulate secure fetch
+
+                if "Air Canada" in provider:
+                    # Dynamically add the linked account to the user's portfolio
+                    new_id = len(portfolio_data["accounts"]) + 1
+                    portfolio_data["accounts"].append({
+                        "id": new_id,
+                        "name": "Air Canada Aeroplan",
+                        "type": "Airline",
+                        "balance": "350,000",
+                        "value": "$5,250",
+                        "level": "Aeroplan 50K",
+                        "expiration": "18 Months",
+                        "icon": "flight_takeoff",
+                        "status_color": "success"
+                    })
+
+                    portfolio_data["total_valuation"] += 5250.00
+                    portfolio_data["programs"] += 1
+
+                    # Push immediate update
+                    await send_event(ws, "ZENITH_DATA_UPDATE", {
+                        "dashboard": dashboard_data,
+                        "portfolio": portfolio_data
+                    })
+                    print("Air Canada Account linked and data pushed.")
 
             if data.get("type") == "REQUEST_ZENITH_DATA":
                 await send_event(ws, "ZENITH_DATA_UPDATE", {

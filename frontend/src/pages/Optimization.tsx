@@ -1,11 +1,24 @@
+import { useState } from 'react';
+import { useZenithData } from '../hooks/useZenithData';
+
 export function Optimization() {
+    const { optimizationResult, calculateOptimization } = useZenithData();
+    const [amount, setAmount] = useState<number>(50000);
+    const [source, setSource] = useState<string>("Zenith Ultimate Rewards");
+    const [destination, setDestination] = useState<string>("Global Airlines Alliance");
+
+    const handleCalculate = () => {
+        calculateOptimization(amount, source, destination);
+    };
+
     return (
-        <div className="max-w-[1280px] mx-auto w-full p-md lg:p-xl">
+        <div className="max-w-max-width mx-auto p-md lg:p-xl w-full">
             {/* Page Header */}
             <header className="mb-lg">
                 <h1 className="font-headline-xl text-headline-xl text-primary">Optimization Engine</h1>
                 <p className="font-body-lg text-body-lg text-on-surface-variant mt-xs">Maximize your reward yield across all categories and redemptions.</p>
             </header>
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
                 {/* Earn More Section */}
                 <section className="lg:col-span-12 flex flex-col gap-md">
@@ -13,6 +26,7 @@ export function Optimization() {
                         <h2 className="font-headline-lg text-headline-lg text-primary">Earn More</h2>
                         <span className="font-body-sm text-body-sm text-on-surface-variant">Active Multipliers</span>
                     </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter">
                         {/* Category Card 1 */}
                         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-md flex flex-col gap-sm shadow-sm relative overflow-hidden group">
@@ -88,9 +102,10 @@ export function Optimization() {
                         <div className="flex flex-col md:flex-row gap-lg items-end">
                             <div className="flex-1 w-full">
                                 <label className="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-2">Points Source</label>
-                                <select className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-body-md text-body-md focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow appearance-none">
+                                <select value={source} onChange={e => setSource(e.target.value)} className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-body-md text-body-md focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow appearance-none">
                                     <option>Zenith Ultimate Rewards</option>
                                     <option>Membership Milestones</option>
+                                    <option>Air Canada (Aeroplan)</option>
                                 </select>
                             </div>
                             <div className="flex items-center justify-center w-12 h-12 mb-1 shrink-0 text-outline">
@@ -98,17 +113,18 @@ export function Optimization() {
                             </div>
                             <div className="flex-1 w-full">
                                 <label className="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-2">Destination Goal</label>
-                                <select className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-body-md text-body-md focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow appearance-none">
+                                <select value={destination} onChange={e => setDestination(e.target.value)} className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-body-md text-body-md focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow appearance-none">
                                     <option>Global Airlines Alliance</option>
                                     <option>Pacific Airways</option>
                                     <option>Luxury Hotel Group</option>
+                                    <option>Star Alliance (ANA / EVA)</option>
                                 </select>
                             </div>
                             <div className="w-full md:w-48">
                                 <label className="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-2">Amount</label>
-                                <input className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-data-mono text-data-mono focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow text-right" type="number" defaultValue="50000" />
+                                <input value={amount} onChange={e => setAmount(parseInt(e.target.value) || 0)} className="w-full border border-outline-variant rounded-lg px-4 py-3 bg-surface text-primary font-data-mono text-data-mono focus:border-on-tertiary-container focus:ring-1 focus:ring-on-tertiary-container outline-none transition-shadow text-right" type="number" />
                             </div>
-                            <button className="w-full md:w-auto bg-primary text-on-primary rounded-lg px-6 py-3 font-data-mono text-data-mono whitespace-nowrap hover:bg-inverse-surface transition-colors">
+                            <button onClick={handleCalculate} className="w-full md:w-auto bg-primary text-on-primary rounded-lg px-6 py-3 font-data-mono text-data-mono whitespace-nowrap hover:bg-inverse-surface transition-colors">
                                 Calculate
                             </button>
                         </div>
@@ -125,32 +141,31 @@ export function Optimization() {
                                     </tr>
                                 </thead>
                                 <tbody className="font-body-sm text-body-sm">
-                                    <tr className="border-b border-surface-dim hover:bg-surface-bright transition-colors group">
-                                        <td className="py-4 px-4 flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-primary">
-                                                <span className="material-symbols-outlined text-sm">flight_takeoff</span>
-                                            </div>
-                                            <span className="font-data-mono text-data-mono text-primary group-hover:text-on-tertiary-container transition-colors">Global Airlines Alliance</span>
-                                        </td>
-                                        <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right">1 : 1</td>
-                                        <td className="py-4 px-4 text-right">
-                                            <span className="inline-block bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded font-label-caps text-label-caps">+30% Promo</span>
-                                        </td>
-                                        <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right font-bold">2.4 cpp</td>
-                                    </tr>
-                                    <tr className="border-b border-surface-dim hover:bg-surface-bright transition-colors group">
-                                        <td className="py-4 px-4 flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-primary">
-                                                <span className="material-symbols-outlined text-sm">bed</span>
-                                            </div>
-                                            <span className="font-data-mono text-data-mono text-primary group-hover:text-on-tertiary-container transition-colors">Luxury Hotel Group</span>
-                                        </td>
-                                        <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right">1 : 2</td>
-                                        <td className="py-4 px-4 text-right">
-                                            <span className="text-on-surface-variant">-</span>
-                                        </td>
-                                        <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right font-bold">1.8 cpp</td>
-                                    </tr>
+                                    {optimizationResult ? (
+                                        <tr className="border-b border-surface-dim hover:bg-surface-bright transition-colors group">
+                                            <td className="py-4 px-4 flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-primary">
+                                                    <span className="material-symbols-outlined text-sm">
+                                                        {optimizationResult.path.includes("Airlines") || optimizationResult.path.includes("Star Alliance") ? "flight_takeoff" : "bed"}
+                                                    </span>
+                                                </div>
+                                                <span className="font-data-mono text-data-mono text-primary group-hover:text-on-tertiary-container transition-colors">{optimizationResult.path}</span>
+                                            </td>
+                                            <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right">{optimizationResult.ratio}</td>
+                                            <td className="py-4 px-4 text-right">
+                                                {optimizationResult.bonus !== "-" ? (
+                                                     <span className="inline-block bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded font-label-caps text-label-caps">{optimizationResult.bonus}</span>
+                                                ) : (
+                                                     <span className="text-on-surface-variant">-</span>
+                                                )}
+                                            </td>
+                                            <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right font-bold">{optimizationResult.yieldValue}</td>
+                                        </tr>
+                                    ) : (
+                                        <tr>
+                                            <td colSpan={4} className="py-8 text-center text-on-surface-variant">Click calculate to see optimization paths.</td>
+                                        </tr>
+                                    )}
                                 </tbody>
                             </table>
                         </div>
