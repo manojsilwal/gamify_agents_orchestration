@@ -4,9 +4,11 @@ echo "Starting Game-Env Autonomous Agent Framework (Upgraded to React SPA)..."
 
 # Kill existing processes if any are running to ensure a clean start
 echo "Cleaning up any old processes..."
-kill $(lsof -t -i :8080) 2>/dev/null || true
-kill $(lsof -t -i :5173) 2>/dev/null || true
-pkill -f "python agents/points_agent.py" || true
+kill -9 $(lsof -t -i :8080) 2>/dev/null || true
+kill -9 $(lsof -t -i :5173) 2>/dev/null || true
+pkill -9 -f "node server/index.js" || true
+pkill -9 -f "python agents/points_agent.py" || true
+pkill -9 -f "python3 agents/points_agent.py" || true
 
 # 1. Start Orchestrator Server
 echo "1. Starting Node.js Orchestrator Server on ws://localhost:8080..."

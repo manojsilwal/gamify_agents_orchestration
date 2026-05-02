@@ -61,8 +61,7 @@ const MAX_ITER = 8;
 // HELPERS
 // ══════════════════════════════════════════════════
 async function callGemini(sys: string, user: string, apiKey: string) {
-  if (!apiKey) throw new Error("No API Key provided.");
-
+  // Allow passing empty API key so backend handles it
   return new Promise<string>((resolve, reject) => {
     const socket = new WebSocket("ws://localhost:8080");
     const correlationId = Math.random().toString(36).substring(7);
@@ -234,10 +233,6 @@ export function AgenticFlow() {
 
   const runLoop = async () => {
     if (runRef.current) return;
-    if (!apiKey) {
-        log("API Key required.", "error");
-        return;
-    }
     runRef.current = true;
     setIsRunning(true);
     setIterations([]);
