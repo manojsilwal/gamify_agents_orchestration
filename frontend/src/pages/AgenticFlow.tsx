@@ -352,7 +352,7 @@ export function AgenticFlow() {
         <div className="flex items-center gap-4">
              <input
                  type="password"
-                 placeholder="Anthropic API Key (sk-...)"
+                 placeholder="Gemini API Key (Optional - uses Env Var)"
                  value={apiKey}
                  onChange={(e) => saveApiKey(e.target.value)}
                  className="text-sm bg-surface-container-low border border-outline-variant rounded-md px-3 py-1.5 w-64 focus:border-primary outline-none"
@@ -417,8 +417,8 @@ export function AgenticFlow() {
           {/* Start button */}
           {phase === "input" && (
             <div className="p-4 border-t border-outline-variant shrink-0 bg-surface-container-lowest">
-              <button onClick={runLoop} disabled={!inputCode.trim() || !apiKey} className={`w-full py-3 px-4 rounded-lg font-label-caps text-label-caps uppercase tracking-widest transition-all ${inputCode.trim() && apiKey ? 'bg-secondary text-on-secondary hover:bg-secondary-container hover:text-on-secondary-container shadow-md' : 'bg-surface-container-high text-outline-variant cursor-not-allowed'}`}>
-                {apiKey ? '▶ START AUTONOMOUS IMPROVEMENT LOOP' : 'PROVIDE API KEY TO START'}
+              <button onClick={runLoop} disabled={!inputCode.trim()} className={`w-full py-3 px-4 rounded-lg font-label-caps text-label-caps uppercase tracking-widest transition-all ${inputCode.trim() ? 'bg-secondary text-on-secondary hover:bg-secondary-container hover:text-on-secondary-container shadow-md' : 'bg-surface-container-high text-outline-variant cursor-not-allowed'}`}>
+                {'▶ START AUTONOMOUS IMPROVEMENT LOOP'}
               </button>
               <div className="text-center font-label-caps text-[10px] text-on-surface-variant mt-2 tracking-widest">
                 5 AGENTS · {MAX_ITER} MAX ITERATIONS · STOPS AT {TARGET}/10
