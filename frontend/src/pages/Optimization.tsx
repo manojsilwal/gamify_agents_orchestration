@@ -138,6 +138,7 @@ export function Optimization() {
                                         <th className="py-3 px-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-normal text-right">Ratio</th>
                                         <th className="py-3 px-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-normal text-right">Bonus</th>
                                         <th className="py-3 px-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-normal text-right">Yield Value</th>
+                                        <th className="py-3 px-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-normal text-right">Estimated Return</th>
                                     </tr>
                                 </thead>
                                 <tbody className="font-body-sm text-body-sm">
@@ -159,11 +160,15 @@ export function Optimization() {
                                                      <span className="text-on-surface-variant">-</span>
                                                 )}
                                             </td>
-                                            <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right font-bold">{optimizationResult.yieldValue}</td>
+                                            <td className="py-4 px-4 font-data-mono text-data-mono text-primary text-right">{optimizationResult.yieldValue}</td>
+                                            <td className="py-4 px-4 text-right">
+                                                <div className="font-data-mono text-data-mono text-secondary font-bold">{optimizationResult.calculatedPoints} pts</div>
+                                                <div className="text-xs text-on-surface-variant font-medium mt-0.5">~{optimizationResult.calculatedValue}</div>
+                                            </td>
                                         </tr>
                                     ) : (
                                         <tr>
-                                            <td colSpan={4} className="py-8 text-center text-on-surface-variant">Click calculate to see optimization paths.</td>
+                                            <td colSpan={5} className="py-8 text-center text-on-surface-variant">Click calculate to see optimization paths.</td>
                                         </tr>
                                     )}
                                 </tbody>

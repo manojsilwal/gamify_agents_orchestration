@@ -157,11 +157,20 @@ async def handle_calculations(ws, goal_data):
     ratio = f"1 : {int(1 * ratio_multiplier)}" if ratio_multiplier >= 1.0 else f"{int(1/ratio_multiplier)} : 1"
     cpp = f"{cpp_val} cpp"
 
+    # Calculate real value dynamically based on input amount
+    total_destination_points = amount * ratio_multiplier
+    if "+30% Promo" in bonus:
+        total_destination_points *= 1.30
+
+    estimated_dollar_value = total_destination_points * (cpp_val / 100)
+
     result = {
         "path": dest,
         "ratio": ratio,
         "bonus": bonus,
-        "yieldValue": cpp
+        "yieldValue": cpp,
+        "calculatedPoints": f"{int(total_destination_points):,}",
+        "calculatedValue": f"${estimated_dollar_value:,.2f}"
     }
 
     await send_event(ws, "OPTIMIZATION_RESULT", {"result": result}, "Optimizer")
