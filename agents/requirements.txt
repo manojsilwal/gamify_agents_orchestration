@@ -1,4 +1,0 @@
-websockets
-asyncio
-requests
-beautifulsoup4
