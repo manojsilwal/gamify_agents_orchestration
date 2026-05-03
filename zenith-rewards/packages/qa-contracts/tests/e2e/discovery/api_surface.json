@@ -1,0 +1,20 @@
+{
+  "/health": {
+    "method": "GET",
+    "url": "/health",
+    "status": 200,
+    "triggered_by": "manual",
+    "request_payload_shape": {},
+    "response_shape": {"status": "ok", "version": "string", "db_ok": true, "redis_ok": true},
+    "forbidden_fields_seen": []
+  },
+  "/api/v1/portfolio/summary": {
+    "method": "GET",
+    "url": "/api/v1/portfolio/summary",
+    "status": 200,
+    "triggered_by": "manual",
+    "request_payload_shape": {},
+    "response_shape": {},
+    "forbidden_fields_seen": []
+  }
+}

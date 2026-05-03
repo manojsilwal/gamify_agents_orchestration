@@ -1,0 +1,10 @@
+{
+  "/": {
+    "examples": ["/"],
+    "requires_auth": false,
+    "page_title": "Zenith Rewards",
+    "nav_items": [],
+    "forms": [],
+    "interactive_elements": []
+  }
+}
