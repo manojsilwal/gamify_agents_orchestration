@@ -1,0 +1,64 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zenith
+      POSTGRES_PASSWORD: zenith
+      POSTGRES_DB: zenith
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zenith"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./apps/api
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes: [./apps/api:/app]
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker-api:
+    build: ./apps/worker
+    env_file: .env
+    ports: ["8001:8001"]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes: [./apps/worker:/app]
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+  worker-arq:
+    build: ./apps/worker
+    env_file: .env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes: [./apps/worker:/app]
+    command: arq worker_settings.WorkerSettings
+
+  web:
+    build: ./apps/web
+    ports: ["3000:3000"]
+    volumes: [./apps/web:/app, /app/node_modules]
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_WORKER_BASE_URL: http://localhost:8001
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  pgdata:

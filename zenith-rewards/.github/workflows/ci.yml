@@ -1,0 +1,34 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: zenith, POSTGRES_PASSWORD: zenith, POSTGRES_DB: zenith }
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r apps/api/requirements.txt
+      - run: alembic upgrade head
+        working-directory: apps/api
+        env: { DATABASE_URL: "postgresql+asyncpg://zenith:zenith@localhost:5432/zenith" }
+      - run: pytest apps/api/tests/ -v
+
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci
+      - run: npm run typecheck
+        working-directory: apps/web
+      - run: npm run lint
+        working-directory: apps/web
