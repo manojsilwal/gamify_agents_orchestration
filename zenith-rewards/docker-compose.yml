@@ -53,7 +53,7 @@ services:
 
   web:
     build: ./apps/web
-    ports: ["3000:3000"]
+    ports: ["5173:5173"]
     volumes: [./apps/web:/app, /app/node_modules]
     environment:
       VITE_API_BASE_URL: http://localhost:8000

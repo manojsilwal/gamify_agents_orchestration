@@ -19,11 +19,11 @@ docker compose exec api python scripts/seed.py
 ```
 
 ### Accessing the application:
-- App: http://localhost:3000
+- App: http://localhost:5173
 - API docs: http://localhost:8000/docs
 - Login: `demo@zenith.test` / `Demo1234!`
 
 ## Architecture
-- Frontend: React + Vite + TypeScript (running on port 3000)
+- Frontend: React + Vite + TypeScript (running on port 5173)
 - Backend: FastAPI (running on port 8000)
 - Worker: FastAPI for tasks (running on port 8001) and ARQ (Redis queue)
