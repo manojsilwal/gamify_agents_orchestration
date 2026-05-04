@@ -1,3 +1,5 @@
+zenith-rewards/apps/api/venv/
+zenith-rewards/apps/worker/venv/
+zenith-rewards/apps/web/node_modules/
+venv/
 node_modules/
-__pycache__/
-*.log
