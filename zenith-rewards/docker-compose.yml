@@ -24,13 +24,16 @@ services:
   api:
     build: ./apps/api
     env_file: .env
+    environment:
+      WORKER_URL: http://worker-api:8001
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
+      worker-api: { condition: service_started }
     volumes: [./apps/api:/app]
     command: >
-      sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker-api:
     build: ./apps/worker

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 from passlib.context import CryptContext
 
-pwd_context =CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://zenith:zenith@localhost:5432/zenith")
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -30,6 +30,8 @@ VALUATIONS = [
     ("Wyndham Rewards", "hotel", 0.7, 1.1, 1.5),
     ("Wells Fargo Rewards", "bank_points", 1.0, 1.0, 1.0),
     ("Discover Cashback", "cashback", 1.0, 1.0, 1.0),
+    ("Aeroplan", "airline", 1.2, 1.5, 2.0),
+    ("Frontier Miles", "airline", 0.8, 1.1, 1.4),
     ("Bank of America Travel Rewards", "bank_points", 1.0, 1.0, 1.5),
     ("Bilt Rent Day Bonus", "rent_rewards", 2.0, 2.5, 3.0),
 ]
@@ -78,17 +80,38 @@ async def seed():
         """))
         user_id = res.scalar()
 
-        # User card
-        await session.execute(text(f"""
-            INSERT INTO user_cards (user_id, card_name, issuer, annual_fee, current_points)
-            VALUES ('{user_id}', 'Chase Sapphire Preferred', 'Chase', 95.0, 65000)
-        """))
+        # Demo wallet: replace cards & loyalty so re-running seed does not duplicate rows
+        await session.execute(text("DELETE FROM user_cards WHERE user_id = :uid"), {"uid": str(user_id)})
+        await session.execute(text("DELETE FROM loyalty_accounts WHERE user_id = :uid"), {"uid": str(user_id)})
 
-        # Loyalty
-        await session.execute(text(f"""
-            INSERT INTO loyalty_accounts (user_id, program_type, program_name, balance, unit)
-            VALUES ('{user_id}', 'airline', 'United MileagePlus', 40000, 'miles')
-        """))
+        demo_cards = [
+            ("Chase Sapphire Preferred", "Chase", 95.0, 65000),
+            ("Chase Freedom Unlimited", "Chase", 0.0, 22000),
+            ("Discover it Cash Back", "Discover", 0.0, 18500),
+            ("American Express Gold Card", "American Express", 250.0, 48000),
+            ("Wells Fargo Autograph", "Wells Fargo", 0.0, 12000),
+        ]
+        for name, issuer, fee, pts in demo_cards:
+            await session.execute(
+                text("""
+                    INSERT INTO user_cards (user_id, card_name, issuer, annual_fee, current_points)
+                    VALUES (:uid, :name, :issuer, :fee, :pts)
+                """),
+                {"uid": str(user_id), "name": name, "issuer": issuer, "fee": fee, "pts": pts},
+            )
+
+        demo_loyalty = [
+            ("airline", "Aeroplan", 42000, "points"),
+            ("airline", "Frontier Miles", 31000, "miles"),
+        ]
+        for ptype, pname, bal, unit in demo_loyalty:
+            await session.execute(
+                text("""
+                    INSERT INTO loyalty_accounts (user_id, program_type, program_name, balance, unit)
+                    VALUES (:uid, :ptype, :pname, :bal, :unit)
+                """),
+                {"uid": str(user_id), "ptype": ptype, "pname": pname, "bal": bal, "unit": unit},
+            )
 
         # Spending
         await session.execute(text(f"""
@@ -96,6 +119,49 @@ async def seed():
             VALUES ('{user_id}', 1500, 600, 400, 200, 100)
             ON CONFLICT (user_id) DO NOTHING
         """))
+
+        await session.execute(text("""
+            INSERT INTO transfer_bonuses
+              (bank_program, transfer_partner, transfer_ratio, bonus_percentage, start_date, end_date, source)
+            SELECT 'Chase Ultimate Rewards', 'Aeroplan', 1.0, 30,
+                   CURRENT_DATE - 7, CURRENT_DATE + 21, 'admin_seed'
+            WHERE NOT EXISTS (
+              SELECT 1 FROM transfer_bonuses
+              WHERE bank_program = 'Chase Ultimate Rewards' AND transfer_partner = 'Aeroplan'
+            )
+        """))
+
+        await session.execute(text("""
+            INSERT INTO activity_events
+              (user_id, occurred_at, event_type, merchant_label, description, category, amount_usd, points_delta, source)
+            SELECT :uid, TIMESTAMPTZ '2023-10-24', 'earn', 'Marriott Bonvoy Boundless',
+                   'Sign-up bonus posted', 'Sign-up Bonus', 4000.0, 100000, 'api'
+            WHERE NOT EXISTS (SELECT 1 FROM activity_events WHERE user_id = :uid AND merchant_label = 'Marriott Bonvoy Boundless')
+        """), {"uid": str(user_id)})
+
+        await session.execute(text("""
+            INSERT INTO activity_events
+              (user_id, occurred_at, event_type, merchant_label, description, category, amount_usd, points_delta, source)
+            SELECT :uid, TIMESTAMPTZ '2023-10-22', 'earn', 'Delta Airlines Flight 482',
+                   'Travel (3x)', 'Travel', 450.0, 1350, 'api'
+            WHERE NOT EXISTS (SELECT 1 FROM activity_events WHERE user_id = :uid AND merchant_label = 'Delta Airlines Flight 482')
+        """), {"uid": str(user_id)})
+
+        await session.execute(text("""
+            INSERT INTO activity_events
+              (user_id, occurred_at, event_type, merchant_label, description, category, amount_usd, points_delta, source)
+            SELECT :uid, TIMESTAMPTZ '2023-10-20', 'earn', 'Le Bernardin',
+                   'Dining (4x)', 'Dining', 320.0, 1280, 'api'
+            WHERE NOT EXISTS (SELECT 1 FROM activity_events WHERE user_id = :uid AND merchant_label = 'Le Bernardin')
+        """), {"uid": str(user_id)})
+
+        await session.execute(text("""
+            INSERT INTO activity_events
+              (user_id, occurred_at, event_type, merchant_label, description, category, amount_usd, points_delta, source)
+            SELECT :uid, TIMESTAMPTZ '2023-10-15', 'redeem', 'Hyatt Hotels',
+                   'Room award', 'Redeem', NULL, -20000, 'api'
+            WHERE NOT EXISTS (SELECT 1 FROM activity_events WHERE user_id = :uid AND description = 'Room award')
+        """), {"uid": str(user_id)})
 
         await session.commit()
         print("Seed complete.")

@@ -1,21 +1,27 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Dashboard } from './pages/Dashboard';
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { AppShell } from './components/layout/AppShell'
+import { Dashboard } from './pages/Dashboard'
+import { Optimization } from './pages/Optimization'
+import { Portfolio } from './pages/Portfolio'
+import { TransactionHistory } from './pages/TransactionHistory'
+import { ShopCompare } from './pages/ShopCompare'
+import { NotFound } from './pages/NotFound'
 
 function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-[#0A0F1E] text-[#E8E6E1] font-geist">
-        <header className="p-4 border-b border-[rgba(245,200,66,0.12)] flex justify-between items-center">
-          <h1 className="font-instrument text-2xl text-[#F5C842]">Zenith Rewards</h1>
-        </header>
-        <main>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-          </Routes>
-        </main>
-      </div>
+      <Routes>
+        <Route path="/" element={<AppShell />}>
+          <Route index element={<Dashboard />} />
+          <Route path="portfolio" element={<Portfolio />} />
+          <Route path="optimization" element={<Optimization />} />
+          <Route path="history" element={<TransactionHistory />} />
+          <Route path="shopping" element={<ShopCompare />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
     </BrowserRouter>
-  );
+  )
 }
 
-export default App;
+export default App

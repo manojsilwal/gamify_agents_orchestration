@@ -5,5 +5,9 @@
   "workspaces": [
     "apps/*",
     "packages/*"
-  ]
+  ],
+  "scripts": {
+    "test:e2e": "npm run test -w qa-contracts",
+    "test:e2e:live": "npm run test -w qa-contracts -- tests/e2e/zenith-live.spec.ts"
+  }
 }

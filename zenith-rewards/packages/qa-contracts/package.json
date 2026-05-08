@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:live": "playwright test tests/e2e/zenith-live.spec.ts tests/e2e/smoke.spec.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.42.1"

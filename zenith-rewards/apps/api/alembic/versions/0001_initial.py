@@ -7,7 +7,6 @@ Create Date: 2024-05-01 00:00:00.000000
 """
 from typing import Sequence, Union
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '0001'
@@ -16,9 +15,9 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
+    # asyncpg cannot run multiple statements in one execute(); split DDL per statement.
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
     op.execute("""
--- users
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
@@ -28,8 +27,8 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- market_cards (credit card offer database)
+""")
+    op.execute("""
 CREATE TABLE market_cards (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   card_name TEXT NOT NULL,
@@ -52,8 +51,8 @@ CREATE TABLE market_cards (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- user_cards (manually added or provider-synced)
+""")
+    op.execute("""
 CREATE TABLE user_cards (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -71,8 +70,8 @@ CREATE TABLE user_cards (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- loyalty_accounts
+""")
+    op.execute("""
 CREATE TABLE loyalty_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -89,8 +88,8 @@ CREATE TABLE loyalty_accounts (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- spending_profiles
+""")
+    op.execute("""
 CREATE TABLE spending_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -105,8 +104,8 @@ CREATE TABLE spending_profiles (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- point_valuations (admin-maintained program CPP table)
+""")
+    op.execute("""
 CREATE TABLE point_valuations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   program_name TEXT UNIQUE NOT NULL,
@@ -120,8 +119,8 @@ CREATE TABLE point_valuations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- goals
+""")
+    op.execute("""
 CREATE TABLE goals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -131,8 +130,8 @@ CREATE TABLE goals (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- recommendations
+""")
+    op.execute("""
 CREATE TABLE recommendations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -153,8 +152,8 @@ CREATE TABLE recommendations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- agent_jobs
+""")
+    op.execute("""
 CREATE TABLE agent_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   job_type TEXT NOT NULL,
@@ -167,8 +166,8 @@ CREATE TABLE agent_jobs (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- source_evidence
+""")
+    op.execute("""
 CREATE TABLE source_evidence (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   agent_job_id UUID REFERENCES agent_jobs(id) ON DELETE CASCADE,
@@ -181,8 +180,8 @@ CREATE TABLE source_evidence (
   captured_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- provider_connections
+""")
+    op.execute("""
 CREATE TABLE provider_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -193,8 +192,8 @@ CREATE TABLE provider_connections (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- transfer_bonuses
+""")
+    op.execute("""
 CREATE TABLE transfer_bonuses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bank_program TEXT NOT NULL,
@@ -207,20 +206,18 @@ CREATE TABLE transfer_bonuses (
   verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-    """)
+""")
 
 def downgrade() -> None:
-    op.execute("""
-DROP TABLE transfer_bonuses;
-DROP TABLE provider_connections;
-DROP TABLE source_evidence;
-DROP TABLE agent_jobs;
-DROP TABLE recommendations;
-DROP TABLE goals;
-DROP TABLE point_valuations;
-DROP TABLE spending_profiles;
-DROP TABLE loyalty_accounts;
-DROP TABLE user_cards;
-DROP TABLE market_cards;
-DROP TABLE users;
-    """)
+    op.execute("DROP TABLE IF EXISTS transfer_bonuses;")
+    op.execute("DROP TABLE IF EXISTS provider_connections;")
+    op.execute("DROP TABLE IF EXISTS source_evidence;")
+    op.execute("DROP TABLE IF EXISTS agent_jobs;")
+    op.execute("DROP TABLE IF EXISTS recommendations;")
+    op.execute("DROP TABLE IF EXISTS goals;")
+    op.execute("DROP TABLE IF EXISTS point_valuations;")
+    op.execute("DROP TABLE IF EXISTS spending_profiles;")
+    op.execute("DROP TABLE IF EXISTS loyalty_accounts;")
+    op.execute("DROP TABLE IF EXISTS user_cards;")
+    op.execute("DROP TABLE IF EXISTS market_cards;")
+    op.execute("DROP TABLE IF EXISTS users;")
