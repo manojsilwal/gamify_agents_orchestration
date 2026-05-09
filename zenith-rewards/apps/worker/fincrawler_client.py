@@ -178,3 +178,46 @@ async def fincrawler_extract_data(url: str, prompt: str) -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "json_parse_error", "detail": str(e)}
 
+
+async def fincrawler_search_shopping(query: str) -> dict[str, Any]:
+    """
+    Call the advanced multi-retailer search endpoint in FinCrawler.
+    Leverages Playwright stealth contexts, LLM extraction (DeepSeek), and Google fallback.
+    """
+    if not fincrawler_is_configured():
+        return {"ok": False, "error": "fincrawler_not_configured"}
+
+    base = os.environ["FINCRAWLER_BASE_URL"].strip().rstrip("/")
+    path = "/shop/search"
+    api_key = os.environ.get("FINCRAWLER_API_KEY", "").strip()
+    timeout_sec = float(os.environ.get("FINCRAWLER_TIMEOUT_SECONDS", "180"))
+
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    body = {"query": query, "google_fallback": True}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_sec)) as client:
+        try:
+            r = await client.post(
+                f"{base}{path}",
+                json=body,
+                headers={**headers, "Content-Type": "application/json"},
+            )
+        except httpx.RequestError as e:
+            return {"ok": False, "error": f"fincrawler_fetch_failed: {e!s}"}
+
+    if r.status_code >= 400:
+        return {
+            "ok": False,
+            "error": f"fincrawler_http_{r.status_code}",
+            "detail": r.text[:400],
+        }
+
+    try:
+        data = r.json()
+        return {"ok": True, "results": data}
+    except Exception as e:
+        return {"ok": False, "error": "json_parse_error", "detail": str(e)}
