@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from fincrawler_client import fincrawler_is_configured, fincrawler_scrape_page
+from fincrawler_client import fincrawler_is_configured, fincrawler_scrape_page, fincrawler_search_shopping
 from shopping import (
     BROWSER_UA,
     RETAILERS,
@@ -66,7 +66,7 @@ async def _maybe_enrich_with_fincrawler(
         base["fincrawler_attempted"] = False
         return base
 
-    fc = await fincrawler_scrape_page(search_url, max_bytes=max_bytes)
+    fc = await fincrawler_scrape_page, fincrawler_search_shopping(search_url, max_bytes=max_bytes)
     base["fincrawler_attempted"] = True
     if not fc.get("ok") or not fc.get("html"):
         base["fetch_source"] = "http"
@@ -143,11 +143,52 @@ def _rank(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+
 async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> dict[str, Any]:
     """Batch mode: wait for all retailers, return stable ordering + rankings."""
     q = " ".join(query.split())
     if len(q) < 2:
         return {"query": query, "retailers": [], "error": "query_too_short"}
+
+    # --- ADVANCED INTELLIGENCE LAYER (FinCrawler v2) ---
+    if fincrawler_is_configured():
+        fc_res = await fincrawler_search_shopping(q)
+        if fc_res.get("ok"):
+            results = fc_res["results"]
+            # Map FinCrawler results back to the format expected by Zenith UI
+            # FinCrawler returns a list of results.
+            rows = []
+            for r in results:
+                # Identify which Zenith retailer this matches
+                rid = r.get("retailer_key") or r.get("retailer", "").lower().replace(" ", "")
+                # Create a row compatible with Zenith UI
+                row = new_retailer_row(rid, r.get("retailer", rid), r.get("url", ""))
+                row["status_code"] = r.get("http_status")
+                row["ok"] = r.get("status") == "ok"
+                row["title"] = r.get("data", {}).get("product_name") or r.get("title") or row["label"]
+                row["excerpt"] = r.get("excerpt") or ""
+                
+                # Extract prices from LLM data
+                data = r.get("data") or {}
+                price = data.get("price")
+                if price:
+                    row["price_candidates_usd"] = [price]
+                    row["indicative_low_usd"] = price
+                    row["indicative_high_usd"] = price
+                
+                row["likely_blocked"] = r.get("status") == "blocked"
+                row["fetch_source"] = "fincrawler_v2"
+                rows.append(row)
+            
+            ordered = _order_rows(rows)
+            return {
+                "query": q,
+                "retailers": ordered,
+                "ranked_by_lowest_indicative": _rank(ordered),
+                "tips": _tips_for_query(q),
+                "disclaimer": _SHOPPING_DISCLAIMER,
+            }
+    # ---------------------------------------------------
 
     async with httpx.AsyncClient(
         follow_redirects=True,
