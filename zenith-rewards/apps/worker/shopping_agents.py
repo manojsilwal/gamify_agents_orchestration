@@ -66,7 +66,7 @@ async def _maybe_enrich_with_fincrawler(
         base["fincrawler_attempted"] = False
         return base
 
-    fc = await fincrawler_scrape_page, fincrawler_search_shopping(search_url, max_bytes=max_bytes)
+    fc = await fincrawler_scrape_page(search_url, max_bytes=max_bytes)
     base["fincrawler_attempted"] = True
     if not fc.get("ok") or not fc.get("html"):
         base["fetch_source"] = "http"
@@ -154,7 +154,7 @@ async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> 
     if fincrawler_is_configured():
         fc_res = await fincrawler_search_shopping(q)
         if fc_res.get("ok"):
-            results = fc_res["results"]
+            results = fc_res["results"].get("results", [])
             # Map FinCrawler results back to the format expected by Zenith UI
             # FinCrawler returns a list of results.
             rows = []
@@ -164,8 +164,8 @@ async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> 
                 # Create a row compatible with Zenith UI
                 row = new_retailer_row(rid, r.get("retailer", rid), r.get("url", ""))
                 row["status_code"] = r.get("http_status")
-                row["ok"] = r.get("status") == "ok"
-                row["title"] = r.get("data", {}).get("product_name") or r.get("title") or row["label"]
+                row["ok"] = r.get("status") in ("ok", "ok_via_google")
+                row["title"] = (r.get("data") or {}).get("product_name") or r.get("title") or row["label"]
                 row["excerpt"] = r.get("excerpt") or ""
                 
                 # Extract prices from LLM data

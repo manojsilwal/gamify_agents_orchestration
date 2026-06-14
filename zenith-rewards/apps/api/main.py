@@ -143,7 +143,7 @@ async def shopping_compare(body: ShoppingCompareIn, session: AsyncSession = Depe
     (Amazon, Best Buy, Walmart, eBay, Target) plus stacking tips and wallet-aware reward guidance.
     """
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
             r = await client.post(
                 f"{WORKER_URL}/shopping/compare",
                 json={"query": body.query.strip(), "max_bytes": 350_000},

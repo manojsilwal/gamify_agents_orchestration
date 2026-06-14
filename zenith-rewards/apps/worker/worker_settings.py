@@ -1,3 +1,7 @@
+async def dummy_task(ctx):
+    return "ok"
+
 class WorkerSettings:
-    functions = []
+    functions = [dummy_task]
     redis_settings = None
+
