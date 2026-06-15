@@ -22,7 +22,6 @@ from typing import Any
 import httpx
 
 from fincrawler_client import (
-    fincrawler_google_shopping,
     fincrawler_is_configured,
     fincrawler_scrape_with_escalation,
     fincrawler_search_shopping,
@@ -266,7 +265,7 @@ def _finalize_retailer_rows(by_id: dict[str, dict[str, Any]], query: str) -> lis
             continue
         placeholder = new_retailer_row(rid, label, url_fn(query))
         placeholder["fetch_source"] = "fincrawler_v2"
-        placeholder["error"] = "not_found_in_google_shopping"
+        placeholder["error"] = "not_found_in_shop_search"
         ordered.append(placeholder)
     return ordered
 
@@ -275,13 +274,14 @@ async def _try_fincrawler_compare(query: str) -> list[dict[str, Any]] | None:
     if not fincrawler_is_configured():
         return None
 
-    google_res, search_res = await asyncio.gather(
-        fincrawler_google_shopping(query, get_crawl_options("google_shopping")),
-        fincrawler_search_shopping(query, get_shop_search_options()),
-    )
-
-    by_id = _merge_fincrawler_responses(google_res, search_res, query)
-    if by_id is None:
+    search_res = await fincrawler_search_shopping(query, get_shop_search_options())
+    if not search_res.get("ok"):
+        return None
+    payload = search_res.get("results")
+    if not isinstance(payload, dict):
+        return None
+    by_id = _rows_from_search_payload(payload, query)
+    if not by_id:
         return None
     return _finalize_retailer_rows(by_id, query)
 
@@ -371,41 +371,22 @@ async def _stream_fincrawler_compare(
     query: str,
     max_bytes: int = 350_000,
 ) -> AsyncIterator[dict[str, Any] | None]:
-    """Yield retailer events progressively; final yield is None after summary was emitted."""
-    google_task = asyncio.create_task(
-        fincrawler_google_shopping(query, get_crawl_options("google_shopping"))
-    )
-    search_task = asyncio.create_task(
-        fincrawler_search_shopping(query, get_shop_search_options())
-    )
-
-    google_res: dict[str, Any] = {"ok": False}
-    search_res: dict[str, Any] = {"ok": False}
-    pending = {google_task, search_task}
-
-    while pending:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            if task is google_task:
-                google_res = task.result()
-                if google_res.get("ok"):
-                    payload = google_res.get("results")
-                    if isinstance(payload, dict):
-                        by_id = _rows_from_google_payload(payload, query)
-                        if any(r.get("indicative_low_usd") is not None for r in by_id.values()):
-                            for row in _finalize_retailer_rows(by_id, query):
-                                yield {"type": "retailer", "data": row}
-            else:
-                search_res = task.result()
-
-    merged = _merge_fincrawler_responses(google_res, search_res, query)
-    if merged is None:
+    """Yield retailer events from hybrid POST /shop/search only."""
+    search_res = await fincrawler_search_shopping(query, get_shop_search_options())
+    if not search_res.get("ok"):
         yield None
         return
-
-    fc_rows = _finalize_retailer_rows(merged, query)
-    for row in fc_rows:
+    payload = search_res.get("results")
+    if not isinstance(payload, dict):
+        yield None
+        return
+    by_id = _rows_from_search_payload(payload, query)
+    if not by_id:
+        yield None
+        return
+    for row in _finalize_retailer_rows(by_id, query):
         yield {"type": "retailer", "data": row}
+    yield None
 
     async for updated in _http_fallback_weak_retailers(query, fc_rows, max_bytes):
         yield {"type": "retailer", "data": updated}

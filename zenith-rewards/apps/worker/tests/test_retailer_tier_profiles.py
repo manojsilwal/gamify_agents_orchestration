@@ -17,19 +17,19 @@ from retailer_tier_profiles import (
 
 class TestRetailerTierProfiles(unittest.TestCase):
     def test_amazon_default_tier(self) -> None:
-        self.assertEqual(get_retailer_default_tier("amazon"), 3)
+        self.assertEqual(get_retailer_default_tier("amazon"), 1)
 
     def test_ebay_default_tier(self) -> None:
-        self.assertEqual(get_retailer_default_tier("ebay"), 2)
+        self.assertEqual(get_retailer_default_tier("ebay"), 1)
 
     def test_unknown_retailer_fallback(self) -> None:
-        self.assertEqual(get_retailer_default_tier("unknown_store"), 2)
+        self.assertEqual(get_retailer_default_tier("unknown_store"), 1)
 
     def test_get_crawl_options_includes_retailer_key(self) -> None:
         opts = get_crawl_options("walmart")
         self.assertEqual(opts.retailer_key, "walmart")
-        self.assertEqual(opts.tier, 3)
-        self.assertTrue(opts.warm_session)
+        self.assertEqual(opts.tier, 1)
+        self.assertFalse(opts.warm_session)
         self.assertTrue(opts.session_id.startswith("walmart-"))
 
     def test_ebay_warm_session_false(self) -> None:
@@ -38,22 +38,21 @@ class TestRetailerTierProfiles(unittest.TestCase):
 
     def test_crawl_options_to_request_dict(self) -> None:
         opts = CrawlOptions(
-            tier=3,
+            tier=4,
             max_tier=4,
             auto_escalate=True,
             session_id="amazon-abc",
-            warm_session=True,
+            warm_session=False,
             retailer_key="amazon",
-            behavior={"mouse": True, "scroll": True},
         )
         d = opts.to_request_dict()
-        self.assertEqual(d["tier"], 3)
-        self.assertEqual(d["tier_name"], TIER_NAMES[3])
+        self.assertEqual(d["tier"], 4)
+        self.assertEqual(d["tier_name"], TIER_NAMES[4])
         self.assertEqual(d["max_tier"], 4)
         self.assertTrue(d["auto_escalate"])
+        self.assertTrue(d["escalate_on_block"])
         self.assertEqual(d["session_id"], "amazon-abc")
         self.assertEqual(d["retailer_key"], "amazon")
-        self.assertIn("behavior", d)
 
     def test_with_tier_preserves_session(self) -> None:
         opts = get_crawl_options("target")

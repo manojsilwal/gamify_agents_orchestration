@@ -147,7 +147,7 @@ class TestFinCrawlerShoppingMapping(unittest.TestCase):
         assert row is not None
         rows = _finalize_retailer_rows({"amazon": row}, "example")
         self.assertEqual(len(rows), 5)
-        self.assertEqual(rows[1]["error"], "not_found_in_google_shopping")
+        self.assertEqual(rows[1]["error"], "not_found_in_shop_search")
 
 
 if __name__ == "__main__":

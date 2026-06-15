@@ -1,13 +1,18 @@
-# FinCrawler Tiered Crawl API Contract
+# FinCrawler contract (Zenith worker)
 
-The canonical contract lives in the **FinCrawler service repo** at `CONTRACT.md` (sibling project: `../fincrawler/CONTRACT.md` from this monorepo layout).
+Canonical contract: sibling repo `fincrawler/CONTRACT.md`.
 
-Zenith Rewards (`apps/worker/fincrawler_client.py`) sends tier hints defined there. The crawler engine is implemented in the FinCrawler repo:
+## Hybrid tiers
 
-- `tier_router.py`
-- `fetchers/tier1_curl_cffi.py` … `tier4_managed.py`
-- `behavior/human_sim.py`
-- `session/store.py`
-- `profiles/retailers.json`
+- Tier 1 `compliant` — honest HTTP
+- Tier 4 `bank_grade` — Scrapfly / managed proxy on bot wall
 
-This file is a pointer for Zenith developers. Do not duplicate the full spec here — update `fincrawler/CONTRACT.md` when the API changes.
+## Zenith integration
+
+- Primary: `POST /shop/search` (no Google Shopping parallel call)
+- Fallback crawl: `POST /crawl` with `retailer_key`
+- `POST /shop/google` returns 410 Gone
+
+## Client options
+
+`retailer_tier_profiles.py` sends `tier: 1`, `max_tier: 4`, `escalate_on_block: true`.
