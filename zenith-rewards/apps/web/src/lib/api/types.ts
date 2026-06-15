@@ -87,10 +87,15 @@ export type RetailerCompareRow = {
   indicative_high_usd: number | null
   error: string | null
   likely_blocked: boolean
-  /** Present when compare used FinCrawler (Yahoo-Finance-crawler / TradeTalk service on Render). */
-  fetch_source?: 'http' | 'fincrawler' | 'http+fincrawler'
+  /** Present when compare used FinCrawler (Google Shopping or retailer crawl). */
+  fetch_source?: 'http' | 'fincrawler' | 'http+fincrawler' | 'fincrawler_v2' | 'google_shopping'
   fincrawler_attempted?: boolean
   fincrawler_error?: string | null
+  /** Tier observability from FinCrawler contract (docs/fincrawler-contract.md). */
+  fetch_tier?: number | null
+  tier_name?: string | null
+  detection_hits?: string[] | null
+  session_id?: string | null
 }
 
 export type RetailerRewardHints = {

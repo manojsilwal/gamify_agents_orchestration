@@ -72,3 +72,63 @@ export async function postShoppingCompare(query: string): Promise<ShoppingCompar
   })
   return parseJson(r)
 }
+
+export async function postShoppingCompareStream(
+  query: string,
+  onEvent: (event: any) => void,
+  onError: (err: any) => void
+): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/shopping/compare/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    })
+    
+    if (!response.ok) {
+      const errText = await response.text()
+      onError(new Error(errText || `HTTP ${response.status}`))
+      return
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      onError(new Error('ReadableStream not supported'))
+      return
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try {
+          const event = JSON.parse(line)
+          onEvent(event)
+        } catch (e) {
+          console.error('Failed to parse NDJSON line:', e)
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      try {
+        const event = JSON.parse(buffer)
+        onEvent(event)
+      } catch (e) {
+        console.error('Failed to parse trailing NDJSON line:', e)
+      }
+    }
+  } catch (err) {
+    onError(err)
+  }
+}
+

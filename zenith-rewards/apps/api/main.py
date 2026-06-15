@@ -1,8 +1,10 @@
 import os
+import json
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,7 +145,7 @@ async def shopping_compare(body: ShoppingCompareIn, session: AsyncSession = Depe
     (Amazon, Best Buy, Walmart, eBay, Target) plus stacking tips and wallet-aware reward guidance.
     """
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
             r = await client.post(
                 f"{WORKER_URL}/shopping/compare",
                 json={"query": body.query.strip(), "max_bytes": 350_000},
@@ -169,6 +171,54 @@ async def shopping_compare(body: ShoppingCompareIn, session: AsyncSession = Depe
     )
     data.update(rewards)
     return data
+
+
+@api_router.post("/shopping/compare/stream")
+async def shopping_compare_stream(body: ShoppingCompareIn, session: AsyncSession = Depends(get_db)):
+    """
+    Stream parallel search results per-retailer as they finish.
+    The final 'summary' event is enriched with wallet-aware reward guidelines from the database.
+    """
+    async def event_generator():
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{WORKER_URL}/shopping/compare/stream",
+                    json={"query": body.query.strip(), "max_bytes": 350_000},
+                ) as r:
+                    if r.status_code >= 400:
+                        err_text = await r.aread()
+                        yield json.dumps({"type": "error", "data": {"error": f"worker_http_{r.status_code}", "detail": err_text.decode("utf-8")[:300]}}) + "\n"
+                        return
+                    
+                    async for line in r.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                            if event.get("type") == "summary":
+                                data = event.get("data") or {}
+                                data["stacking_notes"] = [
+                                    "Use the card that earns the highest category rate for that merchant (online vs warehouse).",
+                                    "Some portals exclude marketplaces or auction checkouts—read the offer terms before relying on them.",
+                                ]
+                                user_id = await resolve_demo_user_id(session)
+                                portfolio = await fetch_portfolio_summary(session, user_id)
+                                rewards = build_shopping_rewards_enrichment(
+                                    data.get("retailers") or [],
+                                    portfolio.get("cards") or [],
+                                    portfolio.get("loyalty_accounts") or [],
+                                )
+                                data.update(rewards)
+                                event["data"] = data
+                            yield json.dumps(event, ensure_ascii=False) + "\n"
+                        except Exception as parse_err:
+                            yield json.dumps({"type": "error", "data": {"error": "parse_error", "detail": str(parse_err)}}) + "\n"
+        except httpx.RequestError as e:
+            yield json.dumps({"type": "error", "data": {"error": "worker_unreachable", "detail": str(e)}}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson; charset=utf-8")
 
 
 app.mount("/api/v1", api_router)

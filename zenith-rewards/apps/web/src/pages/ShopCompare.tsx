@@ -1,23 +1,37 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { MaterialIcon } from '../components/MaterialIcon'
 import { ApiStatus } from '../components/ApiStatus'
-import { useShoppingCompare } from '../hooks/useZenithQueries'
-import type { RetailerCompareRow } from '../lib/api/types'
+import type { RetailerCompareRow, ShoppingCompareResponse } from '../lib/api/types'
+import { postShoppingCompareStream } from '../lib/api/client'
 
 function formatUsd(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '—'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
 }
 
-function statusLabel(row: RetailerCompareRow): string {
+function statusLabel(row: RetailerCompareRow & { isFetching?: boolean }): string {
+  if (row.isFetching) return 'Fetching...'
   if (row.ok) return 'OK'
   if (row.status_code === 503) return 'Blocked'
   if (row.status_code === 403) return 'Denied'
   if (row.likely_blocked || row.error === 'likely_bot_challenge') return 'Challenge'
+  if (row.error === 'not_found_in_google_shopping') return 'Not listed'
+  if (row.error === 'timeout') return 'Timeout'
+  if (row.error === 'no_price' || row.error === 'product_not_found') return 'No price'
   const err = row.error ?? ''
   if (err.startsWith('fetch_failed')) return 'Unreach.'
   return 'No data'
 }
+
+function tierDebugLabel(row: RetailerCompareRow): string | null {
+  if (row.fetch_tier == null && !row.detection_hits?.length) return null
+  const tier = row.fetch_tier != null ? `Tier ${row.fetch_tier}` : row.tier_name ?? null
+  const hit = row.detection_hits?.[0]
+  if (tier && hit) return `${tier} · ${hit}`
+  return tier ?? hit ?? null
+}
+
+const showTierDebug = import.meta.env.DEV
 
 function shortLine(s: string, max = 72): string {
   const t = s.trim()
@@ -86,56 +100,181 @@ function ShoppingCompareError({ message }: { message: string }) {
 }
 
 export function ShopCompare() {
-  const compare = useShoppingCompare()
   const [query, setQuery] = useState('')
   /** Last query the user actually submitted — results only show when it still matches the input. */
   const [lastSubmitted, setLastSubmitted] = useState<string | null>(null)
+  const [isPending, setIsPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [data, setData] = useState<ShoppingCompareResponse | null>(null)
+  const [retailerRows, setRetailerRows] = useState<(RetailerCompareRow & { isFetching?: boolean })[]>([])
+  
+  const activeQueryRef = useRef<string | null>(null)
 
   useEffect(() => {
-    compare.reset()
     setLastSubmitted(null)
-    // Mount only: clear any cached mutation state when opening Shop smarter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once; compare.reset is stable enough for our purpose
+    setError(null)
+    setIsPending(false)
+    setData(null)
+    setRetailerRows([])
+    activeQueryRef.current = null
   }, [])
 
   const draft = query.trim()
-  const data =
-    compare.isSuccess &&
-    compare.data &&
-    lastSubmitted !== null &&
-    draft === lastSubmitted
-      ? compare.data
-      : null
-
-  const errorMessage = compare.isError ? humanizeMutationError(compare.error) : null
+  const errorMessage = error
   const issuers = data?.user_rewards_context?.detected_issuers ?? []
   const pointsPerDollar = issuers.includes('chase') || issuers.includes('discover') ? 1.5 : 1.0
 
   const metrics = useMemo(() => {
-    const lows = (data?.retailers ?? [])
+    const lows = retailerRows
       .map((r) => r.indicative_low_usd)
       .filter((n): n is number => n != null)
     if (!lows.length) {
       return { best: null as number | null, worst: null as number | null }
     }
     return { best: Math.min(...lows), worst: Math.max(...lows) }
-  }, [data?.retailers])
+  }, [retailerRows])
 
   const scrapeHealth = useMemo(() => {
-    const rows = data?.retailers ?? []
-    const withPrice = rows.filter((r) => r.indicative_low_usd != null).length
-    const hardBlocked = rows.filter(
+    const withPrice = retailerRows.filter((r) => r.indicative_low_usd != null).length
+    const hardBlocked = retailerRows.filter(
       (r) => (r.status_code ?? 0) >= 400 || r.status_code === 503,
     ).length
-    return { withPrice, hardBlocked, total: rows.length }
-  }, [data?.retailers])
+    return { withPrice, hardBlocked, total: retailerRows.length }
+  }, [retailerRows])
 
   const runCompare = () => {
     const q = query.trim()
     if (q.length < 2) return
-    compare.mutate(q, {
-      onSuccess: () => setLastSubmitted(q),
-    })
+
+    activeQueryRef.current = q
+    setLastSubmitted(q)
+    setIsPending(true)
+    setError(null)
+    setData(null)
+
+    const initialRows: (RetailerCompareRow & { isFetching?: boolean })[] = [
+      {
+        retailer_id: 'amazon',
+        label: 'Amazon',
+        search_url: `https://www.amazon.com/s?k=${encodeURIComponent(q)}`,
+        fetched_url: null,
+        status_code: null,
+        ok: false,
+        title: null,
+        excerpt: null,
+        price_candidates_usd: [],
+        indicative_low_usd: null,
+        indicative_high_usd: null,
+        error: null,
+        likely_blocked: false,
+        isFetching: true,
+      },
+      {
+        retailer_id: 'bestbuy',
+        label: 'Best Buy',
+        search_url: `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}`,
+        fetched_url: null,
+        status_code: null,
+        ok: false,
+        title: null,
+        excerpt: null,
+        price_candidates_usd: [],
+        indicative_low_usd: null,
+        indicative_high_usd: null,
+        error: null,
+        likely_blocked: false,
+        isFetching: true,
+      },
+      {
+        retailer_id: 'walmart',
+        label: 'Walmart',
+        search_url: `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
+        fetched_url: null,
+        status_code: null,
+        ok: false,
+        title: null,
+        excerpt: null,
+        price_candidates_usd: [],
+        indicative_low_usd: null,
+        indicative_high_usd: null,
+        error: null,
+        likely_blocked: false,
+        isFetching: true,
+      },
+      {
+        retailer_id: 'ebay',
+        label: 'eBay',
+        search_url: `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}`,
+        fetched_url: null,
+        status_code: null,
+        ok: false,
+        title: null,
+        excerpt: null,
+        price_candidates_usd: [],
+        indicative_low_usd: null,
+        indicative_high_usd: null,
+        error: null,
+        likely_blocked: false,
+        isFetching: true,
+      },
+      {
+        retailer_id: 'target',
+        label: 'Target',
+        search_url: `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
+        fetched_url: null,
+        status_code: null,
+        ok: false,
+        title: null,
+        excerpt: null,
+        price_candidates_usd: [],
+        indicative_low_usd: null,
+        indicative_high_usd: null,
+        error: null,
+        likely_blocked: false,
+        isFetching: true,
+      },
+    ]
+    setRetailerRows(initialRows)
+
+    postShoppingCompareStream(
+      q,
+      (event) => {
+        if (activeQueryRef.current !== q) return
+
+        if (event.type === 'retailer') {
+          setRetailerRows((prev) =>
+            prev.map((row) =>
+              row.retailer_id === event.data.retailer_id
+                ? { ...row, ...event.data, isFetching: false }
+                : row
+            )
+          )
+        } else if (event.type === 'summary') {
+          setData(event.data)
+          setIsPending(false)
+          setRetailerRows((prev) => {
+            const summaryRetailers = event.data.retailers || []
+            return prev.map((row) => {
+              const matched = summaryRetailers.find((sr: any) => sr.retailer_id === row.retailer_id)
+              if (matched) {
+                return { ...row, ...matched, isFetching: false }
+              }
+              return { ...row, isFetching: false }
+            })
+          })
+        } else if (event.type === 'error') {
+          setError(event.data?.detail || event.data?.error || 'Stream error')
+          setIsPending(false)
+          setRetailerRows((prev) => prev.map((r) => ({ ...r, isFetching: false })))
+        }
+      },
+      (err) => {
+        if (activeQueryRef.current !== q) return
+        setError(humanizeMutationError(err))
+        setIsPending(false)
+        setRetailerRows((prev) => prev.map((r) => ({ ...r, isFetching: false })))
+      }
+    )
   }
 
   return (
@@ -144,9 +283,9 @@ export function ShopCompare() {
         <div>
           <h1 className="font-headline-lg text-headline-lg text-on-background mb-2">Shop smarter</h1>
           <p className="font-body-md text-on-surface-variant max-w-3xl">
-            Compare Amazon, Best Buy, Walmart, eBay, and Target. We only fetch retailer pages{' '}
-            <strong className="text-on-surface">after you tap Compare</strong>—no background search on page load (free HTTP
-            crawl only).
+            Compare Amazon, Best Buy, Walmart, eBay, and Target. We only fetch prices{' '}
+            <strong className="text-on-surface">after you tap Compare</strong>—via Google Shopping through FinCrawler
+            (with direct retailer fallback when FinCrawler is unavailable).
           </p>
         </div>
 
@@ -170,28 +309,28 @@ export function ShopCompare() {
             <button
               type="button"
               data-testid="shop-compare-submit"
-              disabled={compare.isPending || query.trim().length < 2}
+              disabled={isPending || query.trim().length < 2}
               onClick={runCompare}
               className="px-4 py-2 bg-secondary text-on-secondary rounded-sm font-semibold text-sm hover:bg-secondary-container hover:text-on-secondary-container transition-colors disabled:opacity-50"
             >
-              {compare.isPending ? 'Fetching retailers…' : 'Compare retailers'}
+              {isPending ? 'Fetching retailers…' : 'Compare retailers'}
             </button>
           </div>
           {errorMessage && <ShoppingCompareError message={errorMessage} />}
-          {!data && !compare.isPending && (
+          {!lastSubmitted && !isPending && (
             <p className="text-sm text-on-surface-variant mt-4">
               Results appear here after you search — nothing is fetched until you tap Compare (or press Enter).
             </p>
           )}
         </div>
 
-        {compare.isPending && (
+        {isPending && retailerRows.length === 0 && (
           <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-6 text-center text-on-surface-variant text-sm">
             Fetching retailer pages for “{draft}”…
           </div>
         )}
 
-        {data && (
+        {lastSubmitted && retailerRows.length > 0 && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4">
@@ -210,15 +349,21 @@ export function ShopCompare() {
               </div>
             </div>
 
-            {scrapeHealth.total > 0 && scrapeHealth.withPrice < Math.max(2, scrapeHealth.total * 0.4) && (
+            {isPending && (
+              <div className="w-full bg-surface-container-high h-1 rounded-full overflow-hidden relative">
+                <div className="bg-primary h-full rounded-full animate-pulse w-2/3"></div>
+              </div>
+            )}
+
+            {scrapeHealth.total > 0 && !isPending && scrapeHealth.withPrice < Math.max(2, scrapeHealth.total * 0.4) && (
               <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-on-surface">
                 <MaterialIcon name="shield_lock" className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" size={22} />
                 <div>
-                  <p className="font-semibold text-amber-900 dark:text-amber-100">Retailers often block automated price scans</p>
+                  <p className="font-semibold text-amber-900 dark:text-amber-100">Some stores had no Google Shopping price</p>
                   <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
-                    {scrapeHealth.hardBlocked} store(s) returned HTTP blocked/denied pages. Others may show a challenge page
-                    or load without extractable dollar amounts. Tap <strong className="text-on-surface">Open</strong> for
-                    each site to see the real shelf price. Rewards tiles below still summarize how to maximize points.
+                    {scrapeHealth.hardBlocked} store(s) returned blocked/denied pages or no listing in Google Shopping.
+                    Tap <strong className="text-on-surface">Open</strong> for each site to see the live shelf price. Rewards
+                    tiles below still summarize how to maximize points.
                   </p>
                 </div>
               </div>
@@ -237,7 +382,7 @@ export function ShopCompare() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.retailers.map((row) => (
+                  {retailerRows.map((row) => (
                     <tr
                       key={row.retailer_id}
                       data-testid={`shop-retailer-row-${row.retailer_id}`}
@@ -247,24 +392,48 @@ export function ShopCompare() {
                       <td className="px-4 py-3 text-on-surface">
                         <span
                           className={
-                            row.ok
+                            row.isFetching
+                              ? 'inline-flex rounded-full bg-amber-100 text-amber-700 px-2 py-1 text-xs font-semibold animate-pulse'
+                              : row.ok
                               ? 'inline-flex rounded-full bg-emerald-100 text-emerald-700 px-2 py-1 text-xs font-semibold'
                               : 'inline-flex rounded-full bg-slate-200 text-slate-700 px-2 py-1 text-xs font-semibold'
                           }
                         >
                           {statusLabel(row)}
                         </span>
+                        {showTierDebug && !row.isFetching && (row.likely_blocked || !row.ok) && tierDebugLabel(row) && (
+                          <span
+                            data-testid={`shop-tier-debug-${row.retailer_id}`}
+                            className="mt-1 block text-[10px] text-on-surface-variant font-mono"
+                          >
+                            {tierDebugLabel(row)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-on-surface font-semibold">
-                        {row.indicative_low_usd != null ? formatUsd(row.indicative_low_usd) : '—'}
+                        {row.isFetching ? (
+                          <span className="text-on-surface-variant/40 animate-pulse">Scanning...</span>
+                        ) : row.indicative_low_usd != null ? (
+                          formatUsd(row.indicative_low_usd)
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-4 py-3 text-on-surface-variant">
-                        {row.indicative_low_usd != null && metrics.worst != null && metrics.worst > 0
+                        {row.isFetching ? (
+                          '—'
+                        ) : row.indicative_low_usd != null && metrics.worst != null && metrics.worst > 0
                           ? `${Math.max(0, ((metrics.worst - row.indicative_low_usd) / metrics.worst) * 100).toFixed(1)}%`
                           : '—'}
                       </td>
                       <td className="px-4 py-3 text-on-surface-variant">
-                        {row.indicative_low_usd != null ? `${Math.round(row.indicative_low_usd * pointsPerDollar)} pts` : '—'}
+                        {row.isFetching ? (
+                          '—'
+                        ) : row.indicative_low_usd != null ? (
+                          `${Math.round(row.indicative_low_usd * pointsPerDollar)} pts`
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <a
@@ -282,117 +451,119 @@ export function ShopCompare() {
               </table>
             </div>
 
-            <section
-              data-testid="shop-rewards-wallet"
-              className="rounded-2xl border border-outline-variant bg-surface-container-lowest/80 p-5 md:p-6 space-y-5"
-            >
-              <div className="flex items-center gap-2">
-                <MaterialIcon name="workspace_premium" className="text-primary" size={26} />
-                <div>
-                  <h2 className="font-headline-md text-primary leading-tight">Rewards quick view</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">
-                    Tiles from your portfolio—tap a store row above for live pricing.
-                  </p>
-                </div>
-              </div>
-
-              {data.user_rewards_context && data.user_rewards_context.cards_summary.length > 0 && (
-                <div>
-                  <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
-                    Your cards
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {data.user_rewards_context.cards_summary.map((c) => {
-                      const t = issuerTileTheme(c.issuer ?? '')
-                      return (
-                        <div
-                          key={`${c.card_name}-${c.issuer}`}
-                          className={`rounded-2xl ${t.bg} ring-1 ${t.ring} p-4 flex gap-3 items-start shadow-sm`}
-                        >
-                          <div className="rounded-xl bg-surface-container-high p-2 text-primary">
-                            <MaterialIcon name={t.icon} size={22} />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-on-surface text-sm leading-snug truncate" title={c.card_name ?? ''}>
-                              {c.card_name}
-                            </p>
-                            <p className="text-xs text-on-surface-variant mt-0.5">{c.issuer}</p>
-                            <p className="text-[11px] text-primary font-semibold mt-2">~{pointsPerDollar.toFixed(1)}× est. on spend</p>
-                          </div>
-                        </div>
-                      )
-                    })}
+            {data && (
+              <section
+                data-testid="shop-rewards-wallet"
+                className="rounded-2xl border border-outline-variant bg-surface-container-lowest/80 p-5 md:p-6 space-y-5"
+              >
+                <div className="flex items-center gap-2">
+                  <MaterialIcon name="workspace_premium" className="text-primary" size={26} />
+                  <div>
+                    <h2 className="font-headline-md text-primary leading-tight">Rewards quick view</h2>
+                    <p className="text-xs text-on-surface-variant mt-0.5">
+                      Tiles from your portfolio—tap a store row above for live pricing.
+                    </p>
                   </div>
                 </div>
-              )}
 
-              {data.user_rewards_context && data.user_rewards_context.issuer_highlights.length > 0 && (
-                <div>
-                  <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
-                    Issuer playbooks
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {data.user_rewards_context.issuer_highlights.map((h) => {
-                      const t = issuerTileTheme(h.issuer)
-                      return (
-                        <div
-                          key={`${h.issuer}-${h.program}`}
-                          className={`rounded-2xl ${t.bg} ring-1 ${t.ring} p-4 flex flex-col gap-2 shadow-sm`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <MaterialIcon name={t.icon} size={20} className="text-primary" />
-                            <span className="font-semibold text-on-surface text-sm">{h.issuer}</span>
-                            <span className="text-xs text-on-surface-variant truncate">{h.program}</span>
+                {data.user_rewards_context && data.user_rewards_context.cards_summary.length > 0 && (
+                  <div>
+                    <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
+                      Your cards
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {data.user_rewards_context.cards_summary.map((c) => {
+                        const t = issuerTileTheme(c.issuer ?? '')
+                        return (
+                          <div
+                            key={`${c.card_name}-${c.issuer}`}
+                            className={`rounded-2xl ${t.bg} ring-1 ${t.ring} p-4 flex gap-3 items-start shadow-sm`}
+                          >
+                            <div className="rounded-xl bg-surface-container-high p-2 text-primary">
+                              <MaterialIcon name={t.icon} size={22} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-on-surface text-sm leading-snug truncate" title={c.card_name ?? ''}>
+                                {c.card_name}
+                              </p>
+                              <p className="text-xs text-on-surface-variant mt-0.5">{c.issuer}</p>
+                              <p className="text-[11px] text-primary font-semibold mt-2">~{pointsPerDollar.toFixed(1)}× est. on spend</p>
+                            </div>
                           </div>
-                          <p className="text-xs text-on-surface-variant leading-relaxed">{shortLine(h.action, 140)}</p>
-                        </div>
-                      )
-                    })}
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {data.user_rewards_context && data.user_rewards_context.personalized_tips.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {data.user_rewards_context.personalized_tips.slice(0, 3).map((tip) => (
-                    <span
-                      key={tip}
-                      className="inline-flex items-center rounded-full border border-outline-variant bg-surface-container-high px-3 py-1.5 text-[11px] text-on-surface-variant max-w-full"
-                      title={tip}
-                    >
-                      <MaterialIcon name="bolt" size={14} className="mr-1.5 text-amber-600 shrink-0" />
-                      <span className="truncate">{shortLine(tip, 100)}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
+                {data.user_rewards_context && data.user_rewards_context.issuer_highlights.length > 0 && (
+                  <div>
+                    <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
+                      Issuer playbooks
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {data.user_rewards_context.issuer_highlights.map((h) => {
+                        const t = issuerTileTheme(h.issuer)
+                        return (
+                          <div
+                            key={`${h.issuer}-${h.program}`}
+                            className={`rounded-2xl ${t.bg} ring-1 ${t.ring} p-4 flex flex-col gap-2 shadow-sm`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <MaterialIcon name={t.icon} size={20} className="text-primary" />
+                              <span className="font-semibold text-on-surface text-sm">{h.issuer}</span>
+                              <span className="text-xs text-on-surface-variant truncate">{h.program}</span>
+                            </div>
+                            <p className="text-xs text-on-surface-variant leading-relaxed">{shortLine(h.action, 140)}</p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
 
-              {data.rewards_by_retailer && data.rewards_by_retailer.length > 0 && (
-                <div>
-                  <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
-                    By store
-                  </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                    {data.rewards_by_retailer.map((rr) => (
-                      <div
-                        key={rr.retailer_id}
-                        data-testid={`shop-rewards-retailer-${rr.retailer_id}`}
-                        className="rounded-xl border border-outline-variant bg-surface p-3 flex flex-col gap-1 min-h-[88px]"
+                {data.user_rewards_context && data.user_rewards_context.personalized_tips.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {data.user_rewards_context.personalized_tips.slice(0, 3).map((tip) => (
+                      <span
+                        key={tip}
+                        className="inline-flex items-center rounded-full border border-outline-variant bg-surface-container-high px-3 py-1.5 text-[11px] text-on-surface-variant max-w-full"
+                        title={tip}
                       >
-                        <p className="text-xs font-bold text-on-surface truncate">{rr.label ?? rr.retailer_id}</p>
-                        <p className="text-[10px] text-on-surface-variant leading-snug line-clamp-3">
-                          {shortLine(rr.portal_angle ?? rr.category_angle ?? '—', 96)}
-                        </p>
-                      </div>
+                        <MaterialIcon name="bolt" size={14} className="mr-1.5 text-amber-600 shrink-0" />
+                        <span className="truncate">{shortLine(tip, 100)}</span>
+                      </span>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {data.rewards_disclaimer && (
-                <p className="text-[10px] text-on-surface-variant border-t border-outline-variant pt-3">{data.rewards_disclaimer}</p>
-              )}
-            </section>
+                {data.rewards_by_retailer && data.rewards_by_retailer.length > 0 && (
+                  <div>
+                    <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] tracking-wider font-semibold">
+                      By store
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                      {data.rewards_by_retailer.map((rr) => (
+                        <div
+                          key={rr.retailer_id}
+                          data-testid={`shop-rewards-retailer-${rr.retailer_id}`}
+                          className="rounded-xl border border-outline-variant bg-surface p-3 flex flex-col gap-1 min-h-[88px]"
+                        >
+                          <p className="text-xs font-bold text-on-surface truncate">{rr.label ?? rr.retailer_id}</p>
+                          <p className="text-[10px] text-on-surface-variant leading-snug line-clamp-3">
+                            {shortLine(rr.portal_angle ?? rr.category_angle ?? '—', 96)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {data.rewards_disclaimer && (
+                  <p className="text-[10px] text-on-surface-variant border-t border-outline-variant pt-3">{data.rewards_disclaimer}</p>
+                )}
+              </section>
+            )}
           </>
         )}
       </div>
