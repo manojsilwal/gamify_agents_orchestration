@@ -73,6 +73,14 @@ export type CrawlResult = {
   content_type: string | null
 }
 
+export type ShoppingProduct = {
+  title: string
+  price_usd: number
+  list_price_usd?: number | null
+  discount_pct?: number | null
+  url?: string | null
+}
+
 export type RetailerCompareRow = {
   retailer_id: string
   label: string
@@ -96,6 +104,7 @@ export type RetailerCompareRow = {
   tier_name?: string | null
   detection_hits?: string[] | null
   session_id?: string | null
+  products?: ShoppingProduct[]
 }
 
 export type RetailerRewardHints = {

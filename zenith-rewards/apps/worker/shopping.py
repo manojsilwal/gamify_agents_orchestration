@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from urllib.parse import quote_plus
@@ -109,6 +110,162 @@ def _extract_prices_from_raw_html(html: str) -> list[float]:
     return sorted(found)[:20]
 
 
+def _coerce_price(val: object) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        v = float(val)
+        return v if 4.0 <= v <= 45_000.0 else None
+    if isinstance(val, str):
+        m = re.search(r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d{1,2})?)", val.replace("$", ""))
+        if not m:
+            return None
+        try:
+            v = float(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+        return v if 4.0 <= v <= 45_000.0 else None
+    return None
+
+
+def _discount_pct(price: float, list_price: float | None) -> int | None:
+    if list_price is None or list_price <= price:
+        return None
+    return round((list_price - price) / list_price * 100)
+
+
+def _product_dict(
+    title: str,
+    price: float,
+    *,
+    list_price: float | None = None,
+    url: str | None = None,
+) -> dict:
+    title = re.sub(r"\s+", " ", title).strip()[:200]
+    return {
+        "title": title or "Product",
+        "price_usd": round(price, 2),
+        "list_price_usd": round(list_price, 2) if list_price is not None else None,
+        "discount_pct": _discount_pct(price, list_price),
+        "url": url,
+    }
+
+
+def _dedupe_products(products: list[dict]) -> list[dict]:
+    seen: set[tuple[str, float]] = set()
+    out: list[dict] = []
+    for p in products:
+        key = (p["title"].lower()[:80], p["price_usd"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _products_from_json_ld(html: str) -> list[dict]:
+    products: list[dict] = []
+    for block in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        raw = block.group(1).strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        stack: list[object] = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+                continue
+            if not isinstance(node, dict):
+                continue
+            node_type = node.get("@type") or node.get("type")
+            types = node_type if isinstance(node_type, list) else [node_type]
+            type_str = " ".join(str(t) for t in types if t).lower()
+            if "product" in type_str:
+                title = str(node.get("name") or node.get("title") or "").strip()
+                offers = node.get("offers")
+                offer = offers[0] if isinstance(offers, list) and offers else offers
+                price = None
+                list_price = None
+                url = node.get("url")
+                if isinstance(offer, dict):
+                    price = _coerce_price(offer.get("price") or offer.get("lowPrice"))
+                    list_price = _coerce_price(
+                        offer.get("listPrice") or offer.get("highPrice") or offer.get("wasPrice"),
+                    )
+                    url = offer.get("url") or url
+                if price is None:
+                    price = _coerce_price(node.get("price"))
+                if title and price is not None:
+                    products.append(_product_dict(title, price, list_price=list_price, url=str(url) if url else None))
+            if "itemlist" in type_str:
+                items = node.get("itemListElement") or []
+                if isinstance(items, list):
+                    stack.extend(items)
+            for k in ("@graph", "mainEntity", "hasPart", "itemListElement"):
+                child = node.get(k)
+                if child is not None:
+                    stack.append(child)
+    return products
+
+
+def _products_from_embedded_json(html: str) -> list[dict]:
+    products: list[dict] = []
+    patterns = [
+        re.compile(
+            r'"name"\s*:\s*"([^"\\]{3,200})"[^}]{0,400}?'
+            r'"(?:price|currentPrice)"\s*:\s*"?(\d+(?:\.\d+)?)"?',
+            re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(
+            r'"title"\s*:\s*"([^"\\]{3,200})"[^}]{0,400}?'
+            r'"(?:price|currentPrice)"\s*:\s*"?(\d+(?:\.\d+)?)"?',
+            re.IGNORECASE | re.DOTALL,
+        ),
+    ]
+    for pat in patterns:
+        for m in pat.finditer(html):
+            title = m.group(1).encode().decode("unicode_escape", errors="ignore").strip()
+            price = _coerce_price(m.group(2))
+            if not title or price is None:
+                continue
+            tail = html[m.end() : m.end() + 300]
+            list_m = re.search(
+                r'"(?:listPrice|wasPrice|regularPrice|strikethroughPrice)"\s*:\s*"?(\d+(?:\.\d+)?)"?',
+                tail,
+                re.IGNORECASE,
+            )
+            list_price = _coerce_price(list_m.group(1)) if list_m else None
+            products.append(_product_dict(title, price, list_price=list_price))
+    return products
+
+
+def extract_products_from_html(html: str, *, max_bytes: int, fallback_title: str | None = None) -> list[dict]:
+    """Best-effort product cards from search HTML (up to 6)."""
+    text = html[:max_bytes]
+    products = _dedupe_products(_products_from_json_ld(text) + _products_from_embedded_json(text))
+    products.sort(key=lambda p: p["price_usd"])
+    if products:
+        return products[:6]
+
+    plain = re.sub(r"<[^>]+>", " ", _strip_html_scripts(text))
+    from_plain = _extract_usd_prices(plain)
+    from_embed = _extract_prices_from_raw_html(text)
+    prices = sorted({*from_plain, *from_embed})
+    if not prices:
+        return []
+
+    title = (fallback_title or "Search result").strip()
+    return [_product_dict(title, prices[0], list_price=prices[-1] if len(prices) > 1 else None)]
+
+
 def _signals_bot_challenge(title: str, excerpt: str, html_head: str) -> bool:
     blob = f"{title} {excerpt} {html_head[:12_000]}".lower()
     needles = (
@@ -141,6 +298,7 @@ def new_retailer_row(retailer_id: str, label: str, search_url: str) -> dict:
         "indicative_high_usd": None,
         "error": None,
         "likely_blocked": False,
+        "products": [],
     }
 
 
@@ -177,7 +335,14 @@ def populate_row_from_html(
     row["title"] = title or row.get("label")
     row["excerpt"] = excerpt
     row["price_candidates_usd"] = prices
-    if prices:
+
+    products = extract_products_from_html(text, max_bytes=max_bytes, fallback_title=row["title"])
+    row["products"] = products
+    product_prices = [p["price_usd"] for p in products if isinstance(p.get("price_usd"), (int, float))]
+    if product_prices:
+        row["indicative_low_usd"] = min(product_prices)
+        row["indicative_high_usd"] = max(product_prices)
+    elif prices:
         row["indicative_low_usd"] = min(prices)
         row["indicative_high_usd"] = max(prices)
     else:
@@ -225,6 +390,7 @@ def merge_better_retailer_row(base: dict, candidate: dict) -> dict:
         "indicative_high_usd",
         "error",
         "likely_blocked",
+        "products",
     ):
         out[k] = candidate.get(k)
     return out

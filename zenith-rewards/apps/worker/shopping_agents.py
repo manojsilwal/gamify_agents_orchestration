@@ -367,45 +367,6 @@ async def _http_fallback_weak_retailers(
             yield updated
 
 
-async def _stream_fincrawler_compare(
-    query: str,
-    max_bytes: int = 350_000,
-) -> AsyncIterator[dict[str, Any] | None]:
-    """Yield retailer events from hybrid POST /shop/search only."""
-    search_res = await fincrawler_search_shopping(query, get_shop_search_options())
-    if not search_res.get("ok"):
-        yield None
-        return
-    payload = search_res.get("results")
-    if not isinstance(payload, dict):
-        yield None
-        return
-    by_id = _rows_from_search_payload(payload, query)
-    if not by_id:
-        yield None
-        return
-    for row in _finalize_retailer_rows(by_id, query):
-        yield {"type": "retailer", "data": row}
-    yield None
-
-    async for updated in _http_fallback_weak_retailers(query, fc_rows, max_bytes):
-        yield {"type": "retailer", "data": updated}
-
-    yield {
-        "type": "summary",
-        "data": {
-            "query": query,
-            "retailers": fc_rows,
-            "ranked_by_lowest_indicative": _rank(fc_rows),
-            "tips": _tips_for_query(query),
-            "disclaimer": (
-                "Indicative prices come from Google Shopping via FinCrawler and may differ from in-cart totals. "
-                "Open each store link to verify live pricing before you buy."
-            ),
-        },
-    }
-    yield None
-
 _SHOPPING_DISCLAIMER = (
     "Indicative prices are parsed from public search pages and may be incomplete or wrong. "
     "Retailers often challenge automated clients—open the search link to verify live pricing."
@@ -605,17 +566,6 @@ async def orchestrate_parallel_compare_stream(
     if len(q) < 2:
         yield {"type": "error", "data": {"error": "query_too_short", "query": query}}
         return
-
-    if fincrawler_is_configured():
-        got_summary = False
-        async for event in _stream_fincrawler_compare(q, max_bytes):
-            if event is None:
-                break
-            if event.get("type") == "summary":
-                got_summary = True
-            yield event
-        if got_summary:
-            return
 
     rows: list[dict[str, Any]] = []
     async with httpx.AsyncClient(

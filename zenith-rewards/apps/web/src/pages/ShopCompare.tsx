@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { MaterialIcon } from '../components/MaterialIcon'
 import { ApiStatus } from '../components/ApiStatus'
-import type { RetailerCompareRow, ShoppingCompareResponse } from '../lib/api/types'
+import type { RetailerCompareRow, ShoppingCompareResponse, ShoppingProduct } from '../lib/api/types'
 import { postShoppingCompareStream } from '../lib/api/client'
 
 function formatUsd(n: number | null | undefined): string {
@@ -23,20 +23,50 @@ function statusLabel(row: RetailerCompareRow & { isFetching?: boolean }): string
   return 'No data'
 }
 
-function tierDebugLabel(row: RetailerCompareRow): string | null {
-  if (row.fetch_tier == null && !row.detection_hits?.length) return null
-  const tier = row.fetch_tier != null ? `Tier ${row.fetch_tier}` : row.tier_name ?? null
-  const hit = row.detection_hits?.[0]
-  if (tier && hit) return `${tier} · ${hit}`
-  return tier ?? hit ?? null
-}
-
-const showTierDebug = import.meta.env.DEV
-
 function shortLine(s: string, max = 72): string {
   const t = s.trim()
   if (t.length <= max) return t
   return `${t.slice(0, max - 1)}…`
+}
+
+function savingsPct(price: number, worst: number | null): string {
+  if (worst == null || worst <= 0) return ''
+  const pct = Math.max(0, ((worst - price) / worst) * 100)
+  return pct > 0 ? ` · -${pct.toFixed(0)}%` : ''
+}
+
+function productLine(row: RetailerCompareRow, worst: number | null): string {
+  const price = row.indicative_low_usd
+  if (price == null) return `${row.label} — ${statusLabel(row)}`
+  const desc = shortLine(row.title || row.excerpt || '', 48)
+  return `${row.label} — ${desc ? `${desc} · ` : ''}${formatUsd(price)}${savingsPct(price, worst)}`
+}
+
+function shoppingProductLine(
+  retailerLabel: string,
+  product: ShoppingProduct,
+  worst: number | null,
+): string {
+  const title = shortLine(product.title, 48)
+  const discount =
+    product.discount_pct != null && product.discount_pct > 0
+      ? ` · -${product.discount_pct}% off`
+      : savingsPct(product.price_usd, worst)
+  return `${retailerLabel} — ${title} · ${formatUsd(product.price_usd)}${discount}`
+}
+
+function rankedProductLine(
+  rank: number,
+  retailerLabel: string,
+  product: ShoppingProduct,
+  worst: number | null,
+): string {
+  const title = shortLine(product.title, 40)
+  const discount =
+    product.discount_pct != null && product.discount_pct > 0
+      ? ` · -${product.discount_pct}% off`
+      : savingsPct(product.price_usd, worst)
+  return `${rank}. ${retailerLabel} — ${title} · ${formatUsd(product.price_usd)}${discount}`
 }
 
 function issuerTileTheme(issuer: string): { icon: string; ring: string; bg: string } {
@@ -106,8 +136,9 @@ export function ShopCompare() {
   const [isPending, setIsPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ShoppingCompareResponse | null>(null)
-  const [retailerRows, setRetailerRows] = useState<(RetailerCompareRow & { isFetching?: boolean })[]>([])
-  
+  const [retailerRows, setRetailerRows] = useState<RetailerCompareRow[]>([])
+  const [feed, setFeed] = useState<(RetailerCompareRow & { fetchedAt: number })[]>([])
+
   const activeQueryRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -116,6 +147,7 @@ export function ShopCompare() {
     setIsPending(false)
     setData(null)
     setRetailerRows([])
+    setFeed([])
     activeQueryRef.current = null
   }, [])
 
@@ -125,14 +157,59 @@ export function ShopCompare() {
   const pointsPerDollar = issuers.includes('chase') || issuers.includes('discover') ? 1.5 : 1.0
 
   const metrics = useMemo(() => {
-    const lows = retailerRows
-      .map((r) => r.indicative_low_usd)
-      .filter((n): n is number => n != null)
-    if (!lows.length) {
+    const prices: number[] = []
+    for (const row of retailerRows) {
+      if (row.products?.length) {
+        for (const p of row.products) prices.push(p.price_usd)
+      } else if (row.indicative_low_usd != null) {
+        prices.push(row.indicative_low_usd)
+      }
+    }
+    if (!prices.length) {
       return { best: null as number | null, worst: null as number | null }
     }
-    return { best: Math.min(...lows), worst: Math.max(...lows) }
+    return { best: Math.min(...prices), worst: Math.max(...prices) }
   }, [retailerRows])
+
+  const productCount = useMemo(
+    () => retailerRows.reduce((n, r) => n + (r.products?.length ?? (r.indicative_low_usd != null ? 1 : 0)), 0),
+    [retailerRows],
+  )
+
+  const sortedProductShortlist = useMemo(() => {
+    const flat: { retailer_id: string; label: string; product: ShoppingProduct }[] = []
+    for (const row of retailerRows) {
+      if (row.products?.length) {
+        for (const product of row.products) {
+          flat.push({ retailer_id: row.retailer_id, label: row.label, product })
+        }
+      }
+    }
+    if (flat.length) {
+      return flat.sort((a, b) => a.product.price_usd - b.product.price_usd).slice(0, 10)
+    }
+    if (data?.ranked_by_lowest_indicative?.length) {
+      return data.ranked_by_lowest_indicative.map((entry) => ({
+        retailer_id: entry.retailer_id,
+        label: entry.label,
+        product: {
+          title: entry.label,
+          price_usd: entry.indicative_low_usd,
+        } satisfies ShoppingProduct,
+      }))
+    }
+    return retailerRows
+      .filter((r) => r.indicative_low_usd != null)
+      .sort((a, b) => (a.indicative_low_usd ?? 0) - (b.indicative_low_usd ?? 0))
+      .map((r) => ({
+        retailer_id: r.retailer_id,
+        label: r.label,
+        product: {
+          title: r.title || r.label,
+          price_usd: r.indicative_low_usd as number,
+        } satisfies ShoppingProduct,
+      }))
+  }, [data, retailerRows])
 
   const scrapeHealth = useMemo(() => {
     const withPrice = retailerRows.filter((r) => r.indicative_low_usd != null).length
@@ -151,90 +228,8 @@ export function ShopCompare() {
     setIsPending(true)
     setError(null)
     setData(null)
-
-    const initialRows: (RetailerCompareRow & { isFetching?: boolean })[] = [
-      {
-        retailer_id: 'amazon',
-        label: 'Amazon',
-        search_url: `https://www.amazon.com/s?k=${encodeURIComponent(q)}`,
-        fetched_url: null,
-        status_code: null,
-        ok: false,
-        title: null,
-        excerpt: null,
-        price_candidates_usd: [],
-        indicative_low_usd: null,
-        indicative_high_usd: null,
-        error: null,
-        likely_blocked: false,
-        isFetching: true,
-      },
-      {
-        retailer_id: 'bestbuy',
-        label: 'Best Buy',
-        search_url: `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}`,
-        fetched_url: null,
-        status_code: null,
-        ok: false,
-        title: null,
-        excerpt: null,
-        price_candidates_usd: [],
-        indicative_low_usd: null,
-        indicative_high_usd: null,
-        error: null,
-        likely_blocked: false,
-        isFetching: true,
-      },
-      {
-        retailer_id: 'walmart',
-        label: 'Walmart',
-        search_url: `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
-        fetched_url: null,
-        status_code: null,
-        ok: false,
-        title: null,
-        excerpt: null,
-        price_candidates_usd: [],
-        indicative_low_usd: null,
-        indicative_high_usd: null,
-        error: null,
-        likely_blocked: false,
-        isFetching: true,
-      },
-      {
-        retailer_id: 'ebay',
-        label: 'eBay',
-        search_url: `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}`,
-        fetched_url: null,
-        status_code: null,
-        ok: false,
-        title: null,
-        excerpt: null,
-        price_candidates_usd: [],
-        indicative_low_usd: null,
-        indicative_high_usd: null,
-        error: null,
-        likely_blocked: false,
-        isFetching: true,
-      },
-      {
-        retailer_id: 'target',
-        label: 'Target',
-        search_url: `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
-        fetched_url: null,
-        status_code: null,
-        ok: false,
-        title: null,
-        excerpt: null,
-        price_candidates_usd: [],
-        indicative_low_usd: null,
-        indicative_high_usd: null,
-        error: null,
-        likely_blocked: false,
-        isFetching: true,
-      },
-    ]
-    setRetailerRows(initialRows)
+    setRetailerRows([])
+    setFeed([])
 
     postShoppingCompareStream(
       q,
@@ -242,37 +237,31 @@ export function ShopCompare() {
         if (activeQueryRef.current !== q) return
 
         if (event.type === 'retailer') {
-          setRetailerRows((prev) =>
-            prev.map((row) =>
-              row.retailer_id === event.data.retailer_id
-                ? { ...row, ...event.data, isFetching: false }
-                : row
-            )
-          )
+          const row = event.data as RetailerCompareRow
+          setFeed((prev) => [...prev, { ...row, fetchedAt: Date.now() }])
+          setRetailerRows((prev) => {
+            const idx = prev.findIndex((r) => r.retailer_id === row.retailer_id)
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = row
+              return next
+            }
+            return [...prev, row]
+          })
         } else if (event.type === 'summary') {
           setData(event.data)
           setIsPending(false)
-          setRetailerRows((prev) => {
-            const summaryRetailers = event.data.retailers || []
-            return prev.map((row) => {
-              const matched = summaryRetailers.find((sr: any) => sr.retailer_id === row.retailer_id)
-              if (matched) {
-                return { ...row, ...matched, isFetching: false }
-              }
-              return { ...row, isFetching: false }
-            })
-          })
+          const summaryRetailers: RetailerCompareRow[] = event.data.retailers || []
+          setRetailerRows(summaryRetailers)
         } else if (event.type === 'error') {
           setError(event.data?.detail || event.data?.error || 'Stream error')
           setIsPending(false)
-          setRetailerRows((prev) => prev.map((r) => ({ ...r, isFetching: false })))
         }
       },
       (err) => {
         if (activeQueryRef.current !== q) return
         setError(humanizeMutationError(err))
         setIsPending(false)
-        setRetailerRows((prev) => prev.map((r) => ({ ...r, isFetching: false })))
       }
     )
   }
@@ -324,34 +313,86 @@ export function ShopCompare() {
           )}
         </div>
 
-        {isPending && retailerRows.length === 0 && (
-          <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-6 text-center text-on-surface-variant text-sm">
-            Fetching retailer pages for “{draft}”…
-          </div>
-        )}
-
-        {lastSubmitted && retailerRows.length > 0 && (
+        {lastSubmitted && (isPending || feed.length > 0 || data) && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4">
-                <p className="text-xs text-on-surface-variant">Best observed price</p>
-                <p className="text-2xl font-semibold text-primary">{formatUsd(metrics.best)}</p>
-              </div>
-              <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4">
-                <p className="text-xs text-on-surface-variant">Spread (worst-best)</p>
-                <p className="text-2xl font-semibold text-primary">
-                  {metrics.best != null && metrics.worst != null ? formatUsd(metrics.worst - metrics.best) : '—'}
-                </p>
-              </div>
-              <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4">
-                <p className="text-xs text-on-surface-variant">Point estimate basis</p>
-                <p className="text-2xl font-semibold text-primary">{pointsPerDollar.toFixed(1)}x</p>
-              </div>
-            </div>
+            {(metrics.best != null || isPending) && (
+              <p className="text-sm text-on-surface-variant font-mono">
+                {metrics.best != null ? (
+                  <>
+                    Best {formatUsd(metrics.best)}
+                    {metrics.best != null && metrics.worst != null && metrics.worst > metrics.best && (
+                      <> · spread {formatUsd(metrics.worst - metrics.best)}</>
+                    )}
+                    {' · '}
+                    {pointsPerDollar.toFixed(1)}x pts
+                  </>
+                ) : (
+                  <>Searching “{draft}”…</>
+                )}
+              </p>
+            )}
 
             {isPending && (
-              <div className="w-full bg-surface-container-high h-1 rounded-full overflow-hidden relative">
-                <div className="bg-primary h-full rounded-full animate-pulse w-2/3"></div>
+              <div className="space-y-1">
+                <div className="w-full bg-surface-container-high h-1 rounded-full overflow-hidden relative">
+                  <div className="bg-primary h-full rounded-full animate-pulse w-2/3" />
+                </div>
+                <p className="text-xs text-on-surface-variant font-mono">
+                  {feed.length} of 5 retailers · {productCount} products
+                </p>
+              </div>
+            )}
+
+            {feed.length > 0 && (
+              <div
+                data-testid="shop-compare-feed"
+                className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4 space-y-1"
+              >
+                <p className="text-xs text-on-surface-variant font-semibold mb-2">Live results</p>
+                {feed.map((row) => (
+                  <div
+                    key={`${row.retailer_id}-${row.fetchedAt}`}
+                    data-testid={`shop-retailer-row-${row.retailer_id}`}
+                    className="space-y-0.5"
+                  >
+                    {row.products && row.products.length > 0 ? (
+                      row.products.slice(0, 5).map((product, idx) => (
+                        <p
+                          key={`${row.retailer_id}-${idx}-${product.price_usd}`}
+                          className="text-sm text-on-surface font-mono leading-relaxed truncate"
+                          title={shoppingProductLine(row.label, product, metrics.worst)}
+                        >
+                          {shoppingProductLine(row.label, product, metrics.worst)}
+                        </p>
+                      ))
+                    ) : (
+                      <p
+                        className="text-sm text-on-surface font-mono leading-relaxed truncate"
+                        title={productLine(row, metrics.worst)}
+                      >
+                        {productLine(row, metrics.worst)}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!isPending && sortedProductShortlist.length > 0 && (
+              <div
+                data-testid="shop-compare-shortlist"
+                className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4 space-y-1"
+              >
+                <p className="text-xs text-on-surface-variant font-semibold mb-2">Best prices</p>
+                {sortedProductShortlist.map((entry, i) => (
+                  <p
+                    key={`${entry.retailer_id}-${entry.product.title}-${entry.product.price_usd}`}
+                    data-testid={`shop-shortlist-row-${entry.retailer_id}`}
+                    className="text-sm text-on-surface font-mono leading-relaxed"
+                  >
+                    {rankedProductLine(i + 1, entry.label, entry.product, metrics.worst)}
+                  </p>
+                ))}
               </div>
             )}
 
@@ -368,88 +409,6 @@ export function ShopCompare() {
                 </div>
               </div>
             )}
-
-            <div className="overflow-x-auto rounded-xl border border-outline-variant">
-              <table className="min-w-[720px] w-full text-left text-sm">
-                <thead className="bg-surface-container-high text-on-surface font-semibold">
-                  <tr>
-                    <th className="px-4 py-3">Retailer</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Price</th>
-                    <th className="px-4 py-3">Savings</th>
-                    <th className="px-4 py-3">Est. points</th>
-                    <th className="px-4 py-3">Search</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {retailerRows.map((row) => (
-                    <tr
-                      key={row.retailer_id}
-                      data-testid={`shop-retailer-row-${row.retailer_id}`}
-                      className="border-t border-outline-variant bg-surface-container-lowest"
-                    >
-                      <td className="px-4 py-3 font-semibold text-on-surface">{row.label}</td>
-                      <td className="px-4 py-3 text-on-surface">
-                        <span
-                          className={
-                            row.isFetching
-                              ? 'inline-flex rounded-full bg-amber-100 text-amber-700 px-2 py-1 text-xs font-semibold animate-pulse'
-                              : row.ok
-                              ? 'inline-flex rounded-full bg-emerald-100 text-emerald-700 px-2 py-1 text-xs font-semibold'
-                              : 'inline-flex rounded-full bg-slate-200 text-slate-700 px-2 py-1 text-xs font-semibold'
-                          }
-                        >
-                          {statusLabel(row)}
-                        </span>
-                        {showTierDebug && !row.isFetching && (row.likely_blocked || !row.ok) && tierDebugLabel(row) && (
-                          <span
-                            data-testid={`shop-tier-debug-${row.retailer_id}`}
-                            className="mt-1 block text-[10px] text-on-surface-variant font-mono"
-                          >
-                            {tierDebugLabel(row)}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-on-surface font-semibold">
-                        {row.isFetching ? (
-                          <span className="text-on-surface-variant/40 animate-pulse">Scanning...</span>
-                        ) : row.indicative_low_usd != null ? (
-                          formatUsd(row.indicative_low_usd)
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-on-surface-variant">
-                        {row.isFetching ? (
-                          '—'
-                        ) : row.indicative_low_usd != null && metrics.worst != null && metrics.worst > 0
-                          ? `${Math.max(0, ((metrics.worst - row.indicative_low_usd) / metrics.worst) * 100).toFixed(1)}%`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-on-surface-variant">
-                        {row.isFetching ? (
-                          '—'
-                        ) : row.indicative_low_usd != null ? (
-                          `${Math.round(row.indicative_low_usd * pointsPerDollar)} pts`
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <a
-                          href={row.search_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary font-semibold hover:underline"
-                        >
-                          Open
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
             {data && (
               <section
