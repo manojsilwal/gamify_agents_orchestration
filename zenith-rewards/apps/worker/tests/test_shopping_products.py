@@ -51,9 +51,25 @@ class TestExtractProductsFromHtml(unittest.TestCase):
             max_bytes=50_000,
             fetched_url="https://amazon.com/s?k=camera",
             status_code=200,
+            query="camera",
         )
         self.assertTrue(row["products"])
         self.assertIsNotNone(row["indicative_low_usd"])
+
+    def test_filters_accessory_noise_for_dji_query(self) -> None:
+        html = """
+        <html><head><title>Amazon.com : dji osmo pocket 3</title></head>
+        <body><span>$10.00</span><span>$419.00</span><span>$519.00</span></body></html>
+        """
+        products = extract_products_from_html(
+            html,
+            max_bytes=50_000,
+            fallback_title="Amazon.com : dji osmo pocket 3",
+            query="dji osmo pocket 3",
+        )
+        self.assertEqual(len(products), 1)
+        self.assertGreaterEqual(products[0]["price_usd"], 150.0)
+        self.assertEqual(products[0]["title"], "dji osmo pocket 3")
 
 
 if __name__ == "__main__":

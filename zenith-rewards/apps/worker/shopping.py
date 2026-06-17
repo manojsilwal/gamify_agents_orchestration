@@ -110,6 +110,51 @@ def _extract_prices_from_raw_html(html: str) -> list[float]:
     return sorted(found)[:20]
 
 
+def _plausible_price_floor(query: str | None) -> float:
+    """Minimum believable USD price for a search query (filters accessory/shipping noise)."""
+    q = (query or "").lower()
+    if any(k in q for k in ("osmo pocket", "pocket 3", "pocket 2")):
+        return 150.0
+    if "dji" in q and any(k in q for k in ("camera", "drone", "gimbal", "mic", "osmo", "pocket")):
+        return 79.0
+    if any(k in q for k in ("macbook", "iphone 16", "iphone 15", "ipad pro")):
+        return 199.0
+    if any(k in q for k in ("oled", "qled", "television", " tv", "4k tv")):
+        return 199.0
+    if any(k in q for k in ("camera", "gopro", "sony a7", "canon r", "nikon z", "webcam")):
+        return 49.0
+    return 15.0
+
+
+def _filter_plausible_prices(prices: list[float], query: str | None) -> list[float]:
+    if not prices:
+        return []
+    floor = _plausible_price_floor(query)
+    above = sorted(p for p in prices if p >= floor)
+    if above:
+        return above
+    if len(prices) >= 3:
+        mid = sorted(prices)[len(prices) // 2]
+        if mid >= floor * 0.5:
+            return sorted(p for p in prices if p >= mid * 0.45)
+    return []
+
+
+def _robust_representative_price(prices: list[float]) -> float | None:
+    if not prices:
+        return None
+    s = sorted(prices)
+    return s[len(s) // 2]
+
+
+def _clean_product_title(title: str | None, query: str | None) -> str:
+    t = re.sub(r"\s+", " ", (title or "").strip())
+    t = re.sub(r"^(Amazon\.com|Amazon|Best Buy|Walmart\.com|Target|eBay)\s*:\s*", "", t, flags=re.I)
+    if not t or t.lower() in {"search results", "search result"}:
+        return (query or "Product").strip()
+    return t
+
+
 def _coerce_price(val: object) -> float | None:
     if val is None:
         return None
@@ -247,10 +292,18 @@ def _products_from_embedded_json(html: str) -> list[dict]:
     return products
 
 
-def extract_products_from_html(html: str, *, max_bytes: int, fallback_title: str | None = None) -> list[dict]:
+def extract_products_from_html(
+    html: str,
+    *,
+    max_bytes: int,
+    fallback_title: str | None = None,
+    query: str | None = None,
+) -> list[dict]:
     """Best-effort product cards from search HTML (up to 6)."""
     text = html[:max_bytes]
+    floor = _plausible_price_floor(query)
     products = _dedupe_products(_products_from_json_ld(text) + _products_from_embedded_json(text))
+    products = [p for p in products if p["price_usd"] >= floor]
     products.sort(key=lambda p: p["price_usd"])
     if products:
         return products[:6]
@@ -258,12 +311,16 @@ def extract_products_from_html(html: str, *, max_bytes: int, fallback_title: str
     plain = re.sub(r"<[^>]+>", " ", _strip_html_scripts(text))
     from_plain = _extract_usd_prices(plain)
     from_embed = _extract_prices_from_raw_html(text)
-    prices = sorted({*from_plain, *from_embed})
+    prices = _filter_plausible_prices(sorted({*from_plain, *from_embed}), query)
     if not prices:
         return []
 
-    title = (fallback_title or "Search result").strip()
-    return [_product_dict(title, prices[0], list_price=prices[-1] if len(prices) > 1 else None)]
+    price = _robust_representative_price(prices)
+    if price is None:
+        return []
+    list_price = max(prices) if len(prices) > 1 and max(prices) > price else None
+    title = _clean_product_title(fallback_title, query)
+    return [_product_dict(title, price, list_price=list_price)]
 
 
 def _signals_bot_challenge(title: str, excerpt: str, html_head: str) -> bool:
@@ -309,6 +366,7 @@ def populate_row_from_html(
     max_bytes: int,
     fetched_url: str | None,
     status_code: int | None,
+    query: str | None = None,
 ) -> dict:
     """Fill title, prices, ok/blocked from HTML snapshot (direct GET or FinCrawler body)."""
     text = html[:max_bytes]
@@ -328,15 +386,17 @@ def populate_row_from_html(
     plain = re.sub(r"<[^>]+>", " ", _strip_html_scripts(text))
     from_plain = _extract_usd_prices(plain)
     from_embed = _extract_prices_from_raw_html(text)
-    prices = sorted({*from_plain, *from_embed})[:12]
+    prices = _filter_plausible_prices(sorted({*from_plain, *from_embed}), query)[:12]
 
     row["fetched_url"] = fetched_url
     row["status_code"] = status_code
-    row["title"] = title or row.get("label")
+    row["title"] = _clean_product_title(title or row.get("label"), query)
     row["excerpt"] = excerpt
     row["price_candidates_usd"] = prices
 
-    products = extract_products_from_html(text, max_bytes=max_bytes, fallback_title=row["title"])
+    products = extract_products_from_html(
+        text, max_bytes=max_bytes, fallback_title=row["title"], query=query,
+    )
     row["products"] = products
     product_prices = [p["price_usd"] for p in products if isinstance(p.get("price_usd"), (int, float))]
     if product_prices:
@@ -402,6 +462,7 @@ async def fetch_retailer_search(
     label: str,
     search_url: str,
     max_bytes: int,
+    query: str = "",
 ) -> dict:
     row = new_retailer_row(retailer_id, label, search_url)
     try:
@@ -416,7 +477,9 @@ async def fetch_retailer_search(
         row["error"] = f"http_{r.status_code}"
         return row
 
-    return populate_row_from_html(row, r.text, max_bytes=max_bytes, fetched_url=str(r.url), status_code=r.status_code)
+    return populate_row_from_html(
+        row, r.text, max_bytes=max_bytes, fetched_url=str(r.url), status_code=r.status_code, query=query,
+    )
 
 
 def _tips_for_query(q: str) -> list[str]:

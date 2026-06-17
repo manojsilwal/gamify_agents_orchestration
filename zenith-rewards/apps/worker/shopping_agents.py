@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import re
 from collections.abc import AsyncIterator
@@ -32,6 +33,7 @@ from retailer_tier_profiles import get_shop_search_options
 logger = logging.getLogger(__name__)
 
 _INTER_RETAILER_PACE_SEC = (0.4, 1.2)
+_STREAM_RETAILER_TIMEOUT_SEC = float(os.environ.get("SHOPPING_STREAM_RETAILER_TIMEOUT_SEC", "45"))
 from shopping import (
     BROWSER_UA,
     RETAILERS,
@@ -397,6 +399,7 @@ async def _maybe_enrich_with_fincrawler(
     label: str,
     search_url: str,
     max_bytes: int,
+    query: str = "",
 ) -> dict[str, Any]:
     if not _row_needs_fincrawler(base):
         base["fetch_source"] = "http"
@@ -427,6 +430,7 @@ async def _maybe_enrich_with_fincrawler(
         max_bytes=max_bytes,
         fetched_url=str(meta.get("final_url") or search_url),
         status_code=status_code,
+        query=query,
     )
     merged = merge_better_retailer_row(base, fc_row)
     merged["fincrawler_attempted"] = True
@@ -453,10 +457,15 @@ async def _run_retailer_with_pace(
     search_url: str,
     max_bytes: int,
     stagger_index: int,
+    query: str = "",
+    *,
+    stream_fast: bool = False,
 ) -> dict[str, Any]:
     if stagger_index > 0:
         await asyncio.sleep(random.uniform(*_INTER_RETAILER_PACE_SEC) * stagger_index)
-    row = await _retailer_agent_run(client, retailer_id, label, search_url, max_bytes)
+    row = await _retailer_agent_run(
+        client, retailer_id, label, search_url, max_bytes, query=query, stream_fast=stream_fast,
+    )
     _log_row_tier(row)
     return row
 
@@ -469,13 +478,15 @@ async def _retailer_agent_run(
     max_bytes: int,
     *,
     attempts: int = 2,
+    query: str = "",
+    stream_fast: bool = False,
 ) -> dict[str, Any]:
     """
     One retailer specialist: fetch search HTML + parse hints, with bounded retries.
     """
     last: dict[str, Any] | None = None
     for attempt in range(max(1, attempts)):
-        last = await fetch_retailer_search(client, retailer_id, label, search_url, max_bytes)
+        last = await fetch_retailer_search(client, retailer_id, label, search_url, max_bytes, query)
         err = str(last.get("error") or "")
         code = last.get("status_code")
         transient = err.startswith("fetch_failed") or code in _RETRYABLE_STATUS
@@ -483,7 +494,35 @@ async def _retailer_agent_run(
             break
         await asyncio.sleep(0.35 * (attempt + 1) + random.random() * 0.25)
     assert last is not None
-    return await _maybe_enrich_with_fincrawler(last, retailer_id, label, search_url, max_bytes)
+    if stream_fast:
+        last["fetch_source"] = "http"
+        last["fincrawler_attempted"] = False
+        return last
+    return await _maybe_enrich_with_fincrawler(last, retailer_id, label, search_url, max_bytes, query)
+
+
+async def _run_retailer_stream_timed(
+    client: httpx.AsyncClient,
+    retailer_id: str,
+    label: str,
+    search_url: str,
+    max_bytes: int,
+    stagger_index: int,
+    query: str,
+) -> dict[str, Any]:
+    try:
+        return await asyncio.wait_for(
+            _run_retailer_with_pace(
+                client, retailer_id, label, search_url, max_bytes, stagger_index, query, stream_fast=True,
+            ),
+            timeout=_STREAM_RETAILER_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        row = new_retailer_row(retailer_id, label, search_url)
+        row["error"] = "timeout"
+        row["ok"] = False
+        logger.warning("retailer=%s stream timeout after %.0fs", retailer_id, _STREAM_RETAILER_TIMEOUT_SEC)
+        return row
 
 
 def _order_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -535,7 +574,7 @@ async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> 
     ) as client:
         tasks = [
             asyncio.create_task(
-                _run_retailer_with_pace(client, rid, lab, url_fn(q), max_bytes, i)
+                _run_retailer_with_pace(client, rid, lab, url_fn(q), max_bytes, i, q)
             )
             for i, (rid, lab, url_fn) in enumerate(RETAILERS)
         ]
@@ -578,7 +617,9 @@ async def orchestrate_parallel_compare_stream(
         },
     ) as client:
         task_objs = [
-            asyncio.create_task(_run_retailer_with_pace(client, rid, lab, url_fn(q), max_bytes, i))
+            asyncio.create_task(
+                _run_retailer_stream_timed(client, rid, lab, url_fn(q), max_bytes, i, q)
+            )
             for i, (rid, lab, url_fn) in enumerate(RETAILERS)
         ]
         for finished in asyncio.as_completed(task_objs):
