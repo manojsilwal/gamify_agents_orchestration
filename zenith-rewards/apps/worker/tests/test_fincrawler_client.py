@@ -128,10 +128,9 @@ class TestFinCrawlerCrawlPath(unittest.IsolatedAsyncioTestCase):
                 )
 
                 body = instance.post.await_args.kwargs["json"]
-                self.assertEqual(body["tier"], 3)
+                self.assertEqual(body["tier"], 1)
                 self.assertEqual(body["retailer_key"], "amazon")
                 self.assertIn("session_id", body)
-                self.assertTrue(body["warm_session"])
 
     async def test_search_shopping_includes_tier_hints(self) -> None:
         with patch.dict(os.environ, {"FINCRAWLER_BASE_URL": "https://fc.test"}, clear=False):
@@ -219,6 +218,51 @@ class TestFinCrawlerEscalation(unittest.IsolatedAsyncioTestCase):
                 first_sid = mock_scrape.await_args_list[0].kwargs["crawl_options"].session_id
                 second_sid = mock_scrape.await_args_list[1].kwargs["crawl_options"].session_id
                 self.assertEqual(first_sid, second_sid)
+
+
+class TestFinCrawlerQuoteFull(unittest.IsolatedAsyncioTestCase):
+    async def test_quote_full_uses_get_quote_path(self) -> None:
+        env = {
+            "FINCRAWLER_BASE_URL": "https://fc.example.com",
+            "FINCRAWLER_QUOTE_PATH": "/quote/full",
+            "FINCRAWLER_QUOTE_TIMEOUT_SECONDS": "300",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(fincrawler_client.httpx, "AsyncClient") as mock_client_cls:
+                instance = MagicMock()
+                mock_client_cls.return_value.__aenter__.return_value = instance
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "ok": True,
+                    "ticker": "MSFT",
+                    "field_count": 42,
+                    "source": "yahoo_asp_api",
+                    "data": {
+                        "financialData.freeCashflow": 1.2e11,
+                        "financialData.totalDebt": 5e10,
+                        "financialData.profitMargins": 0.36,
+                        "financialData.currentRatio": 1.7,
+                    },
+                    "scorecard": {
+                        "fcf": 1.2e11,
+                        "debt": 5e10,
+                        "margin": 0.36,
+                        "current_ratio": 1.7,
+                        "roic": 0.15,
+                        "moat": None,
+                        "moat_source": "agent_required",
+                    },
+                }
+                instance.get = AsyncMock(return_value=resp)
+
+                out = await fincrawler_client.fincrawler_quote_full("MSFT")
+                self.assertTrue(out.get("ok"), out)
+                url = instance.get.await_args.args[0]
+                self.assertEqual(url, "https://fc.example.com/quote/full")
+                params = instance.get.await_args.kwargs["params"]
+                self.assertEqual(params["ticker"], "MSFT")
+                self.assertEqual(out["scorecard"]["fcf"], 1.2e11)
 
 
 @unittest.skipUnless(

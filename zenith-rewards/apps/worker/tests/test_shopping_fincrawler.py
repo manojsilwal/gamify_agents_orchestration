@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import AsyncMock, patch
 
+import shopping_agents
 from shopping_agents import (
     _apply_tier_observability,
     _coerce_usd_price,
     _fincrawler_result_to_row,
     _finalize_retailer_rows,
     _normalize_retailer_id,
+    _placeholder_retailer_rows,
     _rows_from_google_payload,
     _rows_from_search_payload,
+    orchestrate_parallel_compare,
+    orchestrate_parallel_compare_stream,
 )
+from shopping import new_retailer_row
 
 
 class TestFinCrawlerShoppingMapping(unittest.TestCase):
@@ -148,6 +155,157 @@ class TestFinCrawlerShoppingMapping(unittest.TestCase):
         rows = _finalize_retailer_rows({"amazon": row}, "example")
         self.assertEqual(len(rows), 5)
         self.assertEqual(rows[1]["error"], "not_found_in_shop_search")
+
+
+class TestFinCrawlerOrchestration(unittest.IsolatedAsyncioTestCase):
+    def test_placeholder_rows_cover_all_retailers(self) -> None:
+        rows = _placeholder_retailer_rows("desk lamp")
+        self.assertEqual(len(rows), 5)
+        self.assertTrue(all(r["error"] == "fetching" for r in rows))
+        self.assertTrue(all(r["fetch_source"] == "pending" for r in rows))
+
+    async def test_stream_yields_placeholders_before_fincrawler_resolves(self) -> None:
+        search_payload = {
+            "results": [
+                {
+                    "retailer_key": "amazon",
+                    "retailer": "Amazon",
+                    "status": "ok",
+                    "data": {"product_name": "Desk Lamp", "price": 29.99},
+                },
+            ]
+        }
+
+        async def empty_fallback(*_args, **_kwargs):
+            if False:
+                yield
+
+        with patch.dict(os.environ, {"FINCRAWLER_BASE_URL": "https://fc.test"}, clear=False):
+            with patch.object(
+                shopping_agents,
+                "fincrawler_search_shopping",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "results": search_payload},
+            ):
+                with patch.object(
+                    shopping_agents,
+                    "_http_fallback_weak_retailers",
+                    side_effect=empty_fallback,
+                ):
+                    events = [
+                        event
+                        async for event in orchestrate_parallel_compare_stream("desk lamp", max_bytes=10_000)
+                    ]
+
+        retailer_events = [e for e in events if e["type"] == "retailer"]
+        self.assertGreaterEqual(len(retailer_events), 10)
+        for row in retailer_events[:5]:
+            self.assertEqual(row["data"]["error"], "fetching")
+            self.assertEqual(row["data"]["fetch_source"], "pending")
+
+    async def test_stream_uses_fincrawler_when_configured(self) -> None:
+        search_payload = {
+            "results": [
+                {
+                    "retailer_key": "amazon",
+                    "retailer": "Amazon",
+                    "status": "ok",
+                    "data": {"product_name": "Desk Lamp", "price": 29.99},
+                },
+            ]
+        }
+
+        async def empty_fallback(*_args, **_kwargs):
+            return
+            yield  # pragma: no cover — makes this an async generator
+
+        with patch.dict(os.environ, {"FINCRAWLER_BASE_URL": "https://fc.test"}, clear=False):
+            with patch.object(
+                shopping_agents,
+                "fincrawler_search_shopping",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "results": search_payload},
+            ) as mock_search:
+                with patch.object(
+                    shopping_agents,
+                    "_http_fallback_weak_retailers",
+                    side_effect=empty_fallback,
+                ):
+                    events = [
+                        event
+                        async for event in orchestrate_parallel_compare_stream("desk lamp", max_bytes=10_000)
+                    ]
+
+        mock_search.assert_awaited_once()
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[-1]["type"], "summary")
+        summary = events[-1]["data"]
+        self.assertIn("FinCrawler", summary["disclaimer"])
+        amazon = next(r for r in summary["retailers"] if r["retailer_id"] == "amazon")
+        self.assertEqual(amazon["fetch_source"], "fincrawler_v2")
+        self.assertTrue(amazon["ok"])
+
+    async def test_batch_http_fallback_improves_weak_fincrawler_rows(self) -> None:
+        search_payload = {
+            "results": [
+                {
+                    "retailer_key": "amazon",
+                    "retailer": "Amazon",
+                    "status": "ok",
+                    "data": {"product_name": "Desk Lamp", "price": 29.99},
+                },
+            ]
+        }
+
+        async def mock_agent_run(_client, retailer_id, label, search_url, max_bytes, **kwargs):
+            row = new_retailer_row(retailer_id, label, search_url)
+            if retailer_id == "walmart":
+                row["ok"] = True
+                row["indicative_low_usd"] = 27.99
+                row["indicative_high_usd"] = 27.99
+                row["price_candidates_usd"] = [27.99]
+                row["fetch_source"] = "http"
+            return row
+
+        with patch.dict(os.environ, {"FINCRAWLER_BASE_URL": "https://fc.test"}, clear=False):
+            with patch.object(
+                shopping_agents,
+                "fincrawler_search_shopping",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "results": search_payload},
+            ):
+                with patch.object(shopping_agents, "_retailer_agent_run", side_effect=mock_agent_run):
+                    result = await orchestrate_parallel_compare("desk lamp", max_bytes=10_000)
+
+        walmart = next(r for r in result["retailers"] if r["retailer_id"] == "walmart")
+        self.assertEqual(walmart["indicative_low_usd"], 27.99)
+        self.assertTrue(walmart["ok"])
+        self.assertIn("FinCrawler", result["disclaimer"])
+
+    async def test_stream_http_path_yields_placeholders_then_updates(self) -> None:
+        with patch.dict(os.environ, {"FINCRAWLER_BASE_URL": ""}, clear=False):
+            async def mock_stream_timed(_client, retailer_id, label, search_url, max_bytes, stagger_index, query):
+                row = new_retailer_row(retailer_id, label, search_url)
+                row["ok"] = True
+                row["indicative_low_usd"] = 19.99
+                row["fetch_source"] = "http"
+                return row
+
+            with patch.object(
+                shopping_agents,
+                "_run_retailer_stream_timed",
+                side_effect=mock_stream_timed,
+            ):
+                events = [
+                    event
+                    async for event in orchestrate_parallel_compare_stream("desk lamp", max_bytes=10_000)
+                ]
+
+        retailer_events = [e for e in events if e["type"] == "retailer"]
+        self.assertGreaterEqual(len(retailer_events), 10)
+        for row in retailer_events[:5]:
+            self.assertEqual(row["data"]["error"], "fetching")
+        self.assertEqual(events[-1]["type"], "summary")
 
 
 if __name__ == "__main__":

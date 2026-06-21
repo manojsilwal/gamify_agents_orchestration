@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from shopping import compare_across_retailers
 from shopping_agents import orchestrate_parallel_compare_stream
+from fincrawler_client import fincrawler_is_configured, fincrawler_news, fincrawler_quote_full
 
 app = FastAPI(title="Zenith Worker API", version="0.1.0")
 
@@ -108,3 +109,52 @@ async def shopping_compare_stream(req: ShoppingCompareRequest):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson; charset=utf-8")
+
+
+@app.get("/stocks/{ticker}/quote")
+async def stock_quote(ticker: str, force_refresh: bool = False):
+    """Structured Yahoo quote via FinCrawler GET /quote/full (300s timeout)."""
+    if not fincrawler_is_configured():
+        raise HTTPException(status_code=503, detail="fincrawler_not_configured")
+    sym = ticker.upper().strip()
+    if not sym or len(sym) > 12:
+        raise HTTPException(status_code=400, detail="invalid_ticker")
+    result = await fincrawler_quote_full(sym, force_refresh=force_refresh)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "quote_fetch_failed"))
+    return result
+
+
+@app.get("/stocks/{ticker}/scorecard")
+async def stock_scorecard(ticker: str, force_refresh: bool = False):
+    """Business quality scorecard tiles mapped from FinCrawler quote data."""
+    if not fincrawler_is_configured():
+        raise HTTPException(status_code=503, detail="fincrawler_not_configured")
+    sym = ticker.upper().strip()
+    if not sym or len(sym) > 12:
+        raise HTTPException(status_code=400, detail="invalid_ticker")
+    result = await fincrawler_quote_full(sym, force_refresh=force_refresh)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "quote_fetch_failed"))
+    return {
+        "ticker": sym,
+        "scorecard": result.get("scorecard") or {},
+        "field_count": result.get("field_count", 0),
+        "source": result.get("source"),
+        "cache_hit": result.get("cache_hit", False),
+    }
+
+
+@app.get("/stocks/{ticker}/news")
+async def stock_news(ticker: str, limit: int = 8, force_refresh: bool = False):
+    """News headlines via FinCrawler GET /news (parallel-safe with quote)."""
+    if not fincrawler_is_configured():
+        raise HTTPException(status_code=503, detail="fincrawler_not_configured")
+    sym = ticker.upper().strip()
+    if not sym or len(sym) > 12:
+        raise HTTPException(status_code=400, detail="invalid_ticker")
+    limit = max(1, min(limit, 25))
+    result = await fincrawler_news(sym, limit=limit, force_refresh=force_refresh)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "news_fetch_failed"))
+    return result

@@ -34,10 +34,13 @@ __all__ = [
     "fincrawler_extract_data",
     "fincrawler_google_shopping",
     "fincrawler_is_configured",
+    "fincrawler_news",
+    "fincrawler_quote_full",
     "fincrawler_scrape_page",
     "fincrawler_scrape_with_escalation",
     "fincrawler_search_shopping",
     "get_crawl_options",
+    "map_scorecard_from_quote",
 ]
 
 
@@ -126,6 +129,167 @@ async def _fincrawler_post(
     return last
 
 
+async def _fincrawler_get(
+    path: str,
+    *,
+    timeout_sec: float,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not fincrawler_is_configured():
+        return {"ok": False, "error": "fincrawler_not_configured"}
+
+    base = _fincrawler_base()
+    if not path.startswith("/"):
+        path = "/" + path
+    url = f"{base}{path}"
+    headers = _fincrawler_headers(accept="application/json")
+
+    retry_attempts = _env_int("FINCRAWLER_RETRY_ATTEMPTS", 2)
+    last: dict[str, Any] = {"ok": False, "error": "fincrawler_fetch_failed: unknown"}
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(timeout_sec),
+    ) as client:
+        for attempt in range(max(1, retry_attempts)):
+            try:
+                r = await client.get(url, params=params or {}, headers=headers)
+            except httpx.RequestError as e:
+                last = {"ok": False, "error": f"fincrawler_fetch_failed: {e!s}"}
+            else:
+                if r.status_code >= 400:
+                    last = {
+                        "ok": False,
+                        "error": f"fincrawler_http_{r.status_code}",
+                        "detail": r.text[:400],
+                        "http_status": r.status_code,
+                    }
+                else:
+                    try:
+                        payload = r.json()
+                    except Exception as e:
+                        return {"ok": False, "error": "json_parse_error", "detail": str(e)}
+                    return {"ok": True, "payload": payload}
+            if not _is_transient_error(last) or attempt >= retry_attempts - 1:
+                break
+            await asyncio.sleep(0.35 * (attempt + 1) + random.random() * 0.25)
+
+    return last
+
+
+def _quote_timeout_sec() -> float:
+    return float(os.environ.get("FINCRAWLER_QUOTE_TIMEOUT_SECONDS", "300"))
+
+
+def map_scorecard_from_quote(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize FinCrawler quote/scrape payload to scorecard tiles."""
+    if payload.get("scorecard"):
+        return payload["scorecard"]
+    data = payload.get("data") or payload.get("yahoo_data") or {}
+    keys = {
+        "fcf": (
+            "financialData.freeCashflow",
+            "vision.financial_highlights.freeCashflow",
+            "vision.statistics.freeCashflow",
+        ),
+        "debt": ("financialData.totalDebt", "vision.financial_highlights.totalDebt"),
+        "margin": (
+            "financialData.profitMargins",
+            "vision.financial_highlights.profitMargins",
+        ),
+        "current_ratio": (
+            "financialData.currentRatio",
+            "vision.statistics.currentRatio",
+            "vision.financial_highlights.currentRatio",
+        ),
+        "roic": (
+            "defaultKeyStatistics.returnOnCapital",
+            "vision.statistics.returnOnCapital",
+        ),
+    }
+    out: dict[str, Any] = {"moat": None, "moat_source": "agent_required"}
+    for tile, candidates in keys.items():
+        for key in candidates:
+            if data.get(key) is not None:
+                out[tile] = data[key]
+                break
+        else:
+            out[tile] = None
+    return out
+
+
+async def fincrawler_quote_full(
+    ticker: str,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Fetch structured Yahoo quote + scorecard via GET /quote/full."""
+    if not fincrawler_is_configured():
+        return {"ok": False, "error": "fincrawler_not_configured"}
+
+    path = os.environ.get("FINCRAWLER_QUOTE_PATH", "/quote/full").strip() or "/quote/full"
+    sym = ticker.upper().strip()
+    result = await _fincrawler_get(
+        path,
+        timeout_sec=_quote_timeout_sec(),
+        params={"ticker": sym, "force_refresh": str(force_refresh).lower()},
+    )
+    if not result.get("ok"):
+        return result
+
+    payload = result.get("payload") or {}
+    if not payload.get("ok"):
+        return {
+            "ok": False,
+            "error": payload.get("error") or "quote_fetch_failed",
+            "detail": payload,
+        }
+    scorecard = map_scorecard_from_quote(payload)
+    return {
+        "ok": True,
+        "ticker": sym,
+        "source": payload.get("source"),
+        "field_count": payload.get("field_count", 0),
+        "data": payload.get("data") or {},
+        "scorecard": scorecard,
+        "cache_hit": payload.get("cache_hit", False),
+        "modules_fetched": payload.get("modules_fetched") or [],
+    }
+
+
+async def fincrawler_news(
+    ticker: str,
+    *,
+    limit: int = 8,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Fetch news headlines via GET /news (parallel-safe with quote/full)."""
+    if not fincrawler_is_configured():
+        return {"ok": False, "error": "fincrawler_not_configured"}
+
+    sym = ticker.upper().strip()
+    result = await _fincrawler_get(
+        "/news",
+        timeout_sec=float(os.environ.get("FINCRAWLER_TIMEOUT_SECONDS", "90")),
+        params={
+            "ticker": sym,
+            "limit": limit,
+            "force_refresh": str(force_refresh).lower(),
+        },
+    )
+    if not result.get("ok"):
+        return result
+    payload = result.get("payload") or {}
+    return {
+        "ok": True,
+        "ticker": sym,
+        "articles": payload.get("articles") or [],
+        "count": payload.get("count", 0),
+        "source": payload.get("source"),
+        "cache_hit": payload.get("cache_hit", False),
+    }
+
+
 def _coerce_html(payload: dict[str, Any]) -> str | None:
     for key in ("html", "raw_html", "page_html", "snapshot", "body", "content"):
         v = payload.get(key)
@@ -187,6 +351,16 @@ def _parse_scrape_response(r: httpx.Response, max_bytes: int) -> dict[str, Any]:
         html = r.text
 
     if not html:
+        if payload and (payload.get("yahoo_data") or payload.get("scorecard")):
+            return {
+                "ok": True,
+                "html": None,
+                "meta": meta,
+                "payload": payload,
+                "yahoo_data": payload.get("yahoo_data") or {},
+                "scorecard": payload.get("scorecard") or map_scorecard_from_quote(payload),
+                "field_count": payload.get("field_count", 0),
+            }
         return {"ok": False, "error": "fincrawler_no_html", "detail": r.text[:400], "meta": meta}
 
     return {"ok": True, "html": html[:max_bytes], "meta": meta, "payload": payload}

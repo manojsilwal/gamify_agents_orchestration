@@ -95,10 +95,12 @@ export type RetailerCompareRow = {
   indicative_high_usd: number | null
   error: string | null
   likely_blocked: boolean
-  /** Present when compare used FinCrawler (Google Shopping or retailer crawl). */
-  fetch_source?: 'http' | 'fincrawler' | 'http+fincrawler' | 'fincrawler_v2' | 'google_shopping'
+  /** Present when compare used FinCrawler (shop search or retailer crawl). */
+  fetch_source?: 'http' | 'fincrawler' | 'http+fincrawler' | 'fincrawler_v2' | 'google_shopping' | 'pending'
   fincrawler_attempted?: boolean
   fincrawler_error?: string | null
+  /** Client-side or server placeholder while a retailer row is in flight. */
+  isFetching?: boolean
   /** Tier observability from FinCrawler contract (docs/fincrawler-contract.md). */
   fetch_tier?: number | null
   tier_name?: string | null

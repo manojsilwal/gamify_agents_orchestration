@@ -26,7 +26,6 @@ from fincrawler_client import (
     fincrawler_is_configured,
     fincrawler_scrape_with_escalation,
     fincrawler_search_shopping,
-    get_crawl_options,
 )
 from retailer_tier_profiles import get_shop_search_options
 
@@ -272,7 +271,8 @@ def _finalize_retailer_rows(by_id: dict[str, dict[str, Any]], query: str) -> lis
     return ordered
 
 
-async def _try_fincrawler_compare(query: str) -> list[dict[str, Any]] | None:
+async def _fincrawler_compare_rows(query: str) -> list[dict[str, Any]] | None:
+    """FinCrawler POST /shop/search → finalized retailer rows, or None if unavailable."""
     if not fincrawler_is_configured():
         return None
 
@@ -286,6 +286,15 @@ async def _try_fincrawler_compare(query: str) -> list[dict[str, Any]] | None:
     if not by_id:
         return None
     return _finalize_retailer_rows(by_id, query)
+
+
+async def _apply_http_fallback_to_rows(
+    query: str,
+    rows: list[dict[str, Any]],
+    max_bytes: int,
+) -> None:
+    async for _ in _http_fallback_weak_retailers(query, rows, max_bytes):
+        pass
 
 
 def _merge_fincrawler_responses(
@@ -372,6 +381,11 @@ async def _http_fallback_weak_retailers(
 _SHOPPING_DISCLAIMER = (
     "Indicative prices are parsed from public search pages and may be incomplete or wrong. "
     "Retailers often challenge automated clients—open the search link to verify live pricing."
+)
+
+_FINCRAWLER_DISCLAIMER = (
+    "Indicative prices come from FinCrawler multi-retailer shop search and may differ from in-cart totals. "
+    "Open each store link to verify live pricing before you buy."
 )
 
 # Transient cases where a quick retry can help (avoid retrying 503 from bot walls—it usually adds latency only).
@@ -513,7 +527,7 @@ async def _run_retailer_stream_timed(
     try:
         return await asyncio.wait_for(
             _run_retailer_with_pace(
-                client, retailer_id, label, search_url, max_bytes, stagger_index, query, stream_fast=True,
+                client, retailer_id, label, search_url, max_bytes, stagger_index, query, stream_fast=False,
             ),
             timeout=_STREAM_RETAILER_TIMEOUT_SEC,
         )
@@ -523,6 +537,18 @@ async def _run_retailer_stream_timed(
         row["ok"] = False
         logger.warning("retailer=%s stream timeout after %.0fs", retailer_id, _STREAM_RETAILER_TIMEOUT_SEC)
         return row
+
+
+def _placeholder_retailer_rows(query: str) -> list[dict[str, Any]]:
+    """Immediate stream placeholders so the UI can show all five slots while fetches run."""
+    rows: list[dict[str, Any]] = []
+    for rid, label, url_fn in RETAILERS:
+        row = new_retailer_row(rid, label, url_fn(query))
+        row["ok"] = False
+        row["error"] = "fetching"
+        row["fetch_source"] = "pending"
+        rows.append(row)
+    return rows
 
 
 def _order_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -550,17 +576,15 @@ async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> 
     if len(q) < 2:
         return {"query": query, "retailers": [], "error": "query_too_short"}
 
-    fc_rows = await _try_fincrawler_compare(q)
+    fc_rows = await _fincrawler_compare_rows(q)
     if fc_rows is not None:
+        await _apply_http_fallback_to_rows(q, fc_rows, max_bytes)
         return {
             "query": q,
             "retailers": fc_rows,
             "ranked_by_lowest_indicative": _rank(fc_rows),
             "tips": _tips_for_query(q),
-            "disclaimer": (
-                "Indicative prices come from Google Shopping via FinCrawler and may differ from in-cart totals. "
-                "Open each store link to verify live pricing before you buy."
-            ),
+            "disclaimer": _FINCRAWLER_DISCLAIMER,
         }
 
     async with httpx.AsyncClient(
@@ -606,7 +630,37 @@ async def orchestrate_parallel_compare_stream(
         yield {"type": "error", "data": {"error": "query_too_short", "query": query}}
         return
 
-    rows: list[dict[str, Any]] = []
+    if fincrawler_is_configured():
+        fc_rows = _placeholder_retailer_rows(q)
+        for row in fc_rows:
+            yield {"type": "retailer", "data": row}
+
+        resolved = await _fincrawler_compare_rows(q)
+        if resolved is not None:
+            by_id = {r["retailer_id"]: r for r in resolved}
+            for rid, _, _ in RETAILERS:
+                row = by_id.get(rid)
+                if row is not None:
+                    yield {"type": "retailer", "data": row}
+            async for updated in _http_fallback_weak_retailers(q, resolved, max_bytes):
+                yield {"type": "retailer", "data": updated}
+            yield {
+                "type": "summary",
+                "data": {
+                    "query": q,
+                    "retailers": resolved,
+                    "ranked_by_lowest_indicative": _rank(resolved),
+                    "tips": _tips_for_query(q),
+                    "disclaimer": _FINCRAWLER_DISCLAIMER,
+                },
+            }
+            return
+
+    rows = _placeholder_retailer_rows(q)
+    for row in rows:
+        yield {"type": "retailer", "data": row}
+
+    row_by_id = {r["retailer_id"]: r for r in rows}
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(40.0),
@@ -624,10 +678,10 @@ async def orchestrate_parallel_compare_stream(
         ]
         for finished in asyncio.as_completed(task_objs):
             row = await finished
-            rows.append(row)
+            row_by_id[row["retailer_id"]] = row
             yield {"type": "retailer", "data": row}
 
-    ordered = _order_rows(rows)
+    ordered = _order_rows(list(row_by_id.values()))
     yield {
         "type": "summary",
         "data": {

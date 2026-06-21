@@ -4,17 +4,79 @@ import { ApiStatus } from '../components/ApiStatus'
 import type { RetailerCompareRow, ShoppingCompareResponse, ShoppingProduct } from '../lib/api/types'
 import { postShoppingCompareStream } from '../lib/api/client'
 
+const RETAILER_SLOTS: { retailer_id: string; label: string }[] = [
+  { retailer_id: 'amazon', label: 'Amazon' },
+  { retailer_id: 'bestbuy', label: 'Best Buy' },
+  { retailer_id: 'walmart', label: 'Walmart' },
+  { retailer_id: 'ebay', label: 'eBay' },
+  { retailer_id: 'target', label: 'Target' },
+]
+
+function isRowFetching(row: RetailerCompareRow): boolean {
+  return row.isFetching === true || row.error === 'fetching' || row.fetch_source === 'pending'
+}
+
+function placeholderRetailerRows(query: string): RetailerCompareRow[] {
+  return RETAILER_SLOTS.map(({ retailer_id, label }) => ({
+    retailer_id,
+    label,
+    search_url: '',
+    fetched_url: null,
+    status_code: null,
+    ok: false,
+    title: null,
+    excerpt: null,
+    price_candidates_usd: [],
+    indicative_low_usd: null,
+    indicative_high_usd: null,
+    error: 'fetching',
+    likely_blocked: false,
+    fetch_source: 'pending',
+    isFetching: true,
+  }))
+}
+
+function mergeRetailerRow(rows: RetailerCompareRow[], incoming: RetailerCompareRow): RetailerCompareRow[] {
+  const byId = new Map(rows.map((r) => [r.retailer_id, r]))
+  byId.set(incoming.retailer_id, {
+    ...incoming,
+    isFetching: isRowFetching(incoming),
+  })
+  return RETAILER_SLOTS.map(({ retailer_id, label }) => {
+    const row = byId.get(retailer_id)
+    if (row) return row
+    return {
+      retailer_id,
+      label,
+      search_url: '',
+      fetched_url: null,
+      status_code: null,
+      ok: false,
+      title: null,
+      excerpt: null,
+      price_candidates_usd: [],
+      indicative_low_usd: null,
+      indicative_high_usd: null,
+      error: 'fetching',
+      likely_blocked: false,
+      fetch_source: 'pending',
+      isFetching: true,
+    }
+  })
+}
+
 function formatUsd(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '—'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
 }
 
-function statusLabel(row: RetailerCompareRow & { isFetching?: boolean }): string {
-  if (row.isFetching) return 'Fetching...'
+function statusLabel(row: RetailerCompareRow): string {
+  if (isRowFetching(row)) return 'Fetching...'
   if (row.ok) return 'OK'
   if (row.status_code === 503) return 'Blocked'
   if (row.status_code === 403) return 'Denied'
   if (row.likely_blocked || row.error === 'likely_bot_challenge') return 'Challenge'
+  if (row.error === 'not_found_in_shop_search') return 'Not listed'
   if (row.error === 'not_found_in_google_shopping') return 'Not listed'
   if (row.error === 'timeout') return 'Timeout'
   if (row.error === 'no_price' || row.error === 'product_not_found') return 'No price'
@@ -137,7 +199,6 @@ export function ShopCompare() {
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ShoppingCompareResponse | null>(null)
   const [retailerRows, setRetailerRows] = useState<RetailerCompareRow[]>([])
-  const [feed, setFeed] = useState<(RetailerCompareRow & { fetchedAt: number })[]>([])
 
   const activeQueryRef = useRef<string | null>(null)
 
@@ -147,7 +208,6 @@ export function ShopCompare() {
     setIsPending(false)
     setData(null)
     setRetailerRows([])
-    setFeed([])
     activeQueryRef.current = null
   }, [])
 
@@ -211,6 +271,11 @@ export function ShopCompare() {
       }))
   }, [data, retailerRows])
 
+  const completedRetailerCount = useMemo(
+    () => retailerRows.filter((r) => !isRowFetching(r)).length,
+    [retailerRows],
+  )
+
   const scrapeHealth = useMemo(() => {
     const withPrice = retailerRows.filter((r) => r.indicative_low_usd != null).length
     const hardBlocked = retailerRows.filter(
@@ -228,8 +293,7 @@ export function ShopCompare() {
     setIsPending(true)
     setError(null)
     setData(null)
-    setRetailerRows([])
-    setFeed([])
+    setRetailerRows(placeholderRetailerRows(q))
 
     postShoppingCompareStream(
       q,
@@ -238,16 +302,7 @@ export function ShopCompare() {
 
         if (event.type === 'retailer') {
           const row = event.data as RetailerCompareRow
-          setFeed((prev) => [...prev, { ...row, fetchedAt: Date.now() }])
-          setRetailerRows((prev) => {
-            const idx = prev.findIndex((r) => r.retailer_id === row.retailer_id)
-            if (idx >= 0) {
-              const next = [...prev]
-              next[idx] = row
-              return next
-            }
-            return [...prev, row]
-          })
+          setRetailerRows((prev) => mergeRetailerRow(prev, row))
         } else if (event.type === 'summary') {
           setData(event.data)
           setIsPending(false)
@@ -273,8 +328,8 @@ export function ShopCompare() {
           <h1 className="font-headline-lg text-headline-lg text-on-background mb-2">Shop smarter</h1>
           <p className="font-body-md text-on-surface-variant max-w-3xl">
             Compare Amazon, Best Buy, Walmart, eBay, and Target. We only fetch prices{' '}
-            <strong className="text-on-surface">after you tap Compare</strong>—via Google Shopping through FinCrawler
-            (with direct retailer fallback when FinCrawler is unavailable).
+            <strong className="text-on-surface">after you tap Compare</strong>—via FinCrawler multi-retailer
+            shop search (with direct retailer fallback when FinCrawler is unavailable).
           </p>
         </div>
 
@@ -313,7 +368,7 @@ export function ShopCompare() {
           )}
         </div>
 
-        {lastSubmitted && (isPending || feed.length > 0 || data) && (
+        {lastSubmitted && (isPending || retailerRows.length > 0 || data) && (
           <>
             {(metrics.best != null || isPending) && (
               <p className="text-sm text-on-surface-variant font-mono">
@@ -338,24 +393,29 @@ export function ShopCompare() {
                   <div className="bg-primary h-full rounded-full animate-pulse w-2/3" />
                 </div>
                 <p className="text-xs text-on-surface-variant font-mono">
-                  {feed.length} of 5 retailers · {productCount} products
+                  {completedRetailerCount} of 5 retailers · {productCount} products
                 </p>
               </div>
             )}
 
-            {feed.length > 0 && (
+            {retailerRows.length > 0 && (
               <div
                 data-testid="shop-compare-feed"
                 className="rounded-xl border border-outline-variant bg-surface-container-lowest p-4 space-y-1"
               >
                 <p className="text-xs text-on-surface-variant font-semibold mb-2">Live results</p>
-                {feed.map((row) => (
+                {retailerRows.map((row) => (
                   <div
-                    key={`${row.retailer_id}-${row.fetchedAt}`}
+                    key={row.retailer_id}
                     data-testid={`shop-retailer-row-${row.retailer_id}`}
                     className="space-y-0.5"
                   >
-                    {row.products && row.products.length > 0 ? (
+                    {isRowFetching(row) ? (
+                      <p className="text-sm text-on-surface-variant font-mono leading-relaxed flex items-center gap-2">
+                        <span className="inline-block w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin shrink-0" />
+                        {row.label} — Fetching...
+                      </p>
+                    ) : row.products && row.products.length > 0 ? (
                       row.products.slice(0, 5).map((product, idx) => (
                         <p
                           key={`${row.retailer_id}-${idx}-${product.price_usd}`}
@@ -400,9 +460,9 @@ export function ShopCompare() {
               <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-on-surface">
                 <MaterialIcon name="shield_lock" className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" size={22} />
                 <div>
-                  <p className="font-semibold text-amber-900 dark:text-amber-100">Some stores had no Google Shopping price</p>
+                  <p className="font-semibold text-amber-900 dark:text-amber-100">Some stores had no shop search price</p>
                   <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
-                    {scrapeHealth.hardBlocked} store(s) returned blocked/denied pages or no listing in Google Shopping.
+                    {scrapeHealth.hardBlocked} store(s) returned blocked/denied pages or no listing in shop search.
                     Tap <strong className="text-on-surface">Open</strong> for each site to see the live shelf price. Rewards
                     tiles below still summarize how to maximize points.
                   </p>
