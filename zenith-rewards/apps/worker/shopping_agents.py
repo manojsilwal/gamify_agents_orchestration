@@ -26,6 +26,8 @@ from fincrawler_client import (
     fincrawler_is_configured,
     fincrawler_scrape_with_escalation,
     fincrawler_search_shopping,
+    fincrawler_search_shopping_retailer,
+    fincrawler_search_shopping_stream,
 )
 from retailer_tier_profiles import get_shop_search_options
 
@@ -98,17 +100,102 @@ def _row_score(row: dict[str, Any]) -> int:
 
 
 def _merge_retailer_row(existing: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
+    return _merge_retailer_products(existing, candidate)
+
+
+def _product_dedupe_key(product: dict[str, Any]) -> tuple[str, float, str]:
+    title = str(product.get("title") or "").lower()[:80]
+    price = float(product.get("price_usd") or 0)
+    seller = str(product.get("seller") or "").lower()
+    return title, price, seller
+
+
+def _shopping_product_from_listing(item: dict[str, Any]) -> dict[str, Any] | None:
+    title = (item.get("product_name") or item.get("title") or item.get("name") or "").strip()
+    price = _coerce_usd_price(item.get("price") or item.get("price_usd"))
+    if not title or price is None:
+        return None
+    list_price = _coerce_usd_price(item.get("original_price") or item.get("list_price_usd"))
+    seller = item.get("seller")
+    if isinstance(seller, str) and seller.strip():
+        seller = seller.strip()
+    else:
+        seller = None
+    product: dict[str, Any] = {
+        "title": title,
+        "price_usd": price,
+        "url": item.get("product_url") or item.get("url"),
+    }
+    if list_price is not None and list_price > price:
+        product["list_price_usd"] = list_price
+        product["discount_pct"] = int(round((1 - price / list_price) * 100))
+    if seller:
+        product["seller"] = seller
+    return product
+
+
+def _apply_products_to_row(row: dict[str, Any], data: dict[str, Any]) -> None:
+    products: list[dict[str, Any]] = []
+    raw_products = data.get("products")
+    if isinstance(raw_products, list):
+        for item in raw_products:
+            if isinstance(item, dict):
+                product = _shopping_product_from_listing(item)
+                if product:
+                    products.append(product)
+    if not products:
+        single = _shopping_product_from_listing(data)
+        if single:
+            products = [single]
+
+    if not products:
+        return
+
+    seen: set[tuple[str, float, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for product in sorted(products, key=lambda p: p["price_usd"]):
+        key = _product_dedupe_key(product)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(product)
+        if len(deduped) >= 6:
+            break
+
+    row["products"] = deduped
+    prices = [p["price_usd"] for p in deduped]
+    row["price_candidates_usd"] = sorted(set(prices))
+    row["indicative_low_usd"] = min(prices)
+    row["indicative_high_usd"] = max(prices)
+    row["title"] = deduped[0]["title"]
+    row["ok"] = True
+    row["error"] = None
+
+
+def _merge_retailer_products(existing: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
     if existing is None:
         return candidate
-    if _row_score(candidate) > _row_score(existing):
-        return candidate
-    if (
-        candidate.get("indicative_low_usd") is not None
-        and existing.get("indicative_low_usd") is not None
-        and candidate["indicative_low_usd"] < existing["indicative_low_usd"]
-    ):
-        return candidate
-    return existing
+    merged = merge_better_retailer_row(existing, candidate)
+    combined: list[dict[str, Any]] = []
+    seen: set[tuple[str, float, str]] = set()
+    for source in (existing, candidate):
+        for product in source.get("products") or []:
+            if not isinstance(product, dict):
+                continue
+            key = _product_dedupe_key(product)
+            if key in seen:
+                continue
+            seen.add(key)
+            combined.append(product)
+    combined.sort(key=lambda p: p["price_usd"])
+    if combined:
+        merged["products"] = combined[:6]
+        prices = [p["price_usd"] for p in merged["products"]]
+        merged["price_candidates_usd"] = sorted(set(prices))
+        merged["indicative_low_usd"] = min(prices)
+        merged["indicative_high_usd"] = max(prices)
+        merged["title"] = merged["products"][0]["title"]
+    return merged
 
 
 def _apply_tier_observability(row: dict[str, Any], source: dict[str, Any]) -> None:
@@ -149,6 +236,21 @@ def _apply_price_to_row(row: dict[str, Any], price: float | None, title: str | N
         row["title"] = title
 
 
+def _google_listing_to_product(listing: dict[str, Any]) -> dict[str, Any] | None:
+    title = listing.get("title") or listing.get("product_name") or listing.get("name")
+    price = _coerce_usd_price(
+        listing.get("price") or listing.get("price_usd") or listing.get("amount"),
+    )
+    if not title or price is None:
+        return None
+    return {
+        "title": str(title).strip(),
+        "price_usd": price,
+        "url": listing.get("url") or listing.get("link") or listing.get("product_url"),
+        "seller": listing.get("seller") or listing.get("merchant") or listing.get("store"),
+    }
+
+
 def _google_listing_to_row(listing: dict[str, Any], query: str) -> dict[str, Any] | None:
     merchant = (
         listing.get("retailer")
@@ -165,15 +267,19 @@ def _google_listing_to_row(listing: dict[str, Any], query: str) -> dict[str, Any
     label, search_url = _retailer_meta(rid, query)
     row = new_retailer_row(rid, label, search_url)
     row["fetched_url"] = listing.get("url") or listing.get("link") or listing.get("product_url")
-    row["title"] = listing.get("title") or listing.get("product_name") or listing.get("name") or label
     row["excerpt"] = listing.get("snippet") or listing.get("description") or ""
-    price = _coerce_usd_price(
-        listing.get("price") or listing.get("price_usd") or listing.get("amount"),
-    )
-    _apply_price_to_row(row, price, row["title"])
-    if price is None:
+    product = _google_listing_to_product(listing)
+    if product is None:
         row["ok"] = False
         row["error"] = "no_price_in_google_listing"
+    else:
+        row["products"] = [product]
+        row["title"] = product["title"]
+        row["indicative_low_usd"] = product["price_usd"]
+        row["indicative_high_usd"] = product["price_usd"]
+        row["price_candidates_usd"] = [product["price_usd"]]
+        row["ok"] = True
+        row["error"] = None
     row["fetch_source"] = "google_shopping"
     return row
 
@@ -208,11 +314,12 @@ def _fincrawler_result_to_row(result: dict[str, Any], query: str) -> dict[str, A
 
     row["title"] = data.get("product_name") or result.get("title") or row["label"]
     row["excerpt"] = result.get("excerpt") or ""
-
-    price = _coerce_usd_price(data.get("price"))
-    if price is None:
-        price = _coerce_usd_price(result.get("price"))
-    _apply_price_to_row(row, price, row["title"])
+    _apply_products_to_row(row, data)
+    if not row.get("products"):
+        price = _coerce_usd_price(data.get("price"))
+        if price is None:
+            price = _coerce_usd_price(result.get("price"))
+        _apply_price_to_row(row, price, row["title"])
 
     status = str(result.get("status") or "")
     row["likely_blocked"] = status == "blocked"
@@ -226,7 +333,7 @@ def _fincrawler_result_to_row(result: dict[str, Any], query: str) -> dict[str, A
         if data.get("_error"):
             row["ok"] = False
             row["error"] = str(data.get("_error"))
-        elif price is None:
+        elif not row.get("products") and row.get("indicative_low_usd") is None:
             row["ok"] = False
             row["error"] = "no_price"
     else:
@@ -523,11 +630,20 @@ async def _run_retailer_stream_timed(
     max_bytes: int,
     stagger_index: int,
     query: str,
+    *,
+    stream_fast: bool = False,
 ) -> dict[str, Any]:
     try:
         return await asyncio.wait_for(
             _run_retailer_with_pace(
-                client, retailer_id, label, search_url, max_bytes, stagger_index, query, stream_fast=False,
+                client,
+                retailer_id,
+                label,
+                search_url,
+                max_bytes,
+                stagger_index,
+                query,
+                stream_fast=stream_fast,
             ),
             timeout=_STREAM_RETAILER_TIMEOUT_SEC,
         )
@@ -535,6 +651,7 @@ async def _run_retailer_stream_timed(
         row = new_retailer_row(retailer_id, label, search_url)
         row["error"] = "timeout"
         row["ok"] = False
+        row["fetch_source"] = "http"
         logger.warning("retailer=%s stream timeout after %.0fs", retailer_id, _STREAM_RETAILER_TIMEOUT_SEC)
         return row
 
@@ -614,6 +731,232 @@ async def orchestrate_parallel_compare(query: str, max_bytes: int = 350_000) -> 
     }
 
 
+def _stream_row_changed(existing: dict[str, Any], merged: dict[str, Any], before_score: int) -> bool:
+    return (
+        _row_score(merged) > before_score
+        or merged.get("error") != existing.get("error")
+        or merged.get("fetch_source") != existing.get("fetch_source")
+    )
+
+
+def _merge_stream_row(
+    row_by_id: dict[str, dict[str, Any]],
+    incoming: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Merge incoming retailer row; return (merged, changed)."""
+    rid = incoming["retailer_id"]
+    existing = row_by_id.get(rid)
+    if existing is None:
+        row_by_id[rid] = incoming
+        return incoming, True
+    before = _row_score(existing)
+    merged = _merge_retailer_products(existing, incoming)
+    row_by_id[rid] = merged
+    return merged, _stream_row_changed(existing, merged, before)
+
+
+_FC_ROW_KEYS = (
+    "fetched_url",
+    "status_code",
+    "ok",
+    "title",
+    "excerpt",
+    "price_candidates_usd",
+    "indicative_low_usd",
+    "indicative_high_usd",
+    "error",
+    "likely_blocked",
+    "products",
+    "fetch_source",
+    "fetch_tier",
+    "tier_name",
+    "detection_hits",
+    "session_id",
+)
+
+
+def _fc_has_authoritative_price(row: dict[str, Any]) -> bool:
+    return (
+        (row.get("ok") and row.get("indicative_low_usd") is not None)
+        or bool(row.get("products"))
+    )
+
+
+def _merge_fincrawler_shop_row(
+    row_by_id: dict[str, dict[str, Any]],
+    incoming: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Merge FinCrawler rows; always apply status/error so rows leave Fetching…"""
+    rid = incoming["retailer_id"]
+    existing = row_by_id.get(rid)
+    if existing is None:
+        row_by_id[rid] = incoming
+        return incoming, True
+
+    if incoming.get("fetch_source") != "fincrawler_v2":
+        return _merge_stream_row(row_by_id, incoming)
+
+    before = _row_score(existing)
+    merged = {**existing}
+    if _fc_has_authoritative_price(incoming):
+        for key in _FC_ROW_KEYS:
+            merged[key] = incoming.get(key)
+    else:
+        for key in _FC_ROW_KEYS:
+            if key in ("indicative_low_usd", "indicative_high_usd", "price_candidates_usd", "products"):
+                continue
+            merged[key] = incoming.get(key)
+        if _fc_has_authoritative_price(existing):
+            merged["indicative_low_usd"] = existing.get("indicative_low_usd")
+            merged["indicative_high_usd"] = existing.get("indicative_high_usd")
+            merged["price_candidates_usd"] = existing.get("price_candidates_usd")
+            merged["products"] = existing.get("products")
+            merged["ok"] = True
+            merged["error"] = None
+
+    row_by_id[rid] = merged
+    return merged, _stream_row_changed(existing, merged, before)
+
+
+async def _fincrawler_retailer_row(query: str, retailer_id: str) -> dict[str, Any] | None:
+    """Fetch one retailer via FinCrawler POST /shop/search?retailers=[id]."""
+    search_res = await fincrawler_search_shopping_retailer(
+        query,
+        retailer_id,
+        get_shop_search_options(),
+    )
+    if not search_res.get("ok"):
+        return None
+    payload = search_res.get("results")
+    if not isinstance(payload, dict):
+        return None
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        rid = _normalize_retailer_id(str(item.get("retailer_key") or item.get("retailer") or ""))
+        if rid == retailer_id:
+            return _fincrawler_result_to_row(item, query)
+    return None
+
+
+async def _stream_fincrawler_retailer_rows(
+    q: str,
+    row_by_id: dict[str, dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream FinCrawler tiered shop-search rows as each retailer agent completes."""
+    opts = get_shop_search_options()
+    use_stream = os.getenv("FINCRAWLER_SHOP_STREAM", "true").lower() in ("1", "true", "yes", "on")
+
+    if use_stream:
+        saw_retailer = False
+        try:
+            async for event in fincrawler_search_shopping_stream(q, opts):
+                et = event.get("type")
+                if et == "retailer":
+                    saw_retailer = True
+                    item = event.get("data") or {}
+                    row = _fincrawler_result_to_row(item, q)
+                    if row is None:
+                        continue
+                    merged, changed = _merge_fincrawler_shop_row(row_by_id, row)
+                    if changed:
+                        yield merged
+                elif et == "summary":
+                    return
+                elif et == "error":
+                    err = str((event.get("data") or {}).get("error") or "")
+                    if "fincrawler_http_404" in err or "fincrawler_http_405" in err:
+                        break
+                    logger.warning("FinCrawler shop stream error: %s", err)
+            if saw_retailer:
+                return
+        except Exception as exc:
+            logger.warning("FinCrawler shop stream failed, falling back to per-retailer calls: %s", exc)
+
+    tasks = [
+        asyncio.create_task(_fincrawler_retailer_row(q, rid))
+        for rid, _, _ in RETAILERS
+    ]
+    for finished in asyncio.as_completed(tasks):
+        row = await finished
+        if row is None:
+            continue
+        merged, changed = _merge_fincrawler_shop_row(row_by_id, row)
+        if changed:
+            yield merged
+
+
+async def _stream_parallel_http_rows(
+    q: str,
+    max_bytes: int,
+    row_by_id: dict[str, dict[str, Any]],
+    *,
+    stream_fast: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """Fetch retailers in parallel; yield merged rows as each agent finishes."""
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(40.0),
+        headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    ) as client:
+        task_objs = [
+            asyncio.create_task(
+                _run_retailer_stream_timed(
+                    client, rid, lab, url_fn(q), max_bytes, i, q, stream_fast=stream_fast,
+                )
+            )
+            for i, (rid, lab, url_fn) in enumerate(RETAILERS)
+        ]
+        for finished in asyncio.as_completed(task_objs):
+            row = await finished
+            merged, changed = _merge_stream_row(row_by_id, row)
+            if changed:
+                yield merged
+
+
+async def _stream_hybrid_compare_rows(
+    q: str,
+    max_bytes: int,
+    row_by_id: dict[str, dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Run HTTP fast fetch and FinCrawler stream in parallel; yield whichever completes first."""
+    queue: asyncio.Queue[tuple[str, dict[str, Any] | None]] = asyncio.Queue()
+
+    async def http_producer() -> None:
+        try:
+            async for row in _stream_parallel_http_rows(q, max_bytes, row_by_id, stream_fast=True):
+                await queue.put(("row", row))
+        except Exception as exc:
+            logger.warning("HTTP parallel stream failed: %s", exc)
+        finally:
+            await queue.put(("done", None))
+
+    async def fc_producer() -> None:
+        try:
+            async for row in _stream_fincrawler_retailer_rows(q, row_by_id):
+                await queue.put(("row", row))
+        except Exception as exc:
+            logger.warning("FinCrawler parallel stream failed: %s", exc)
+        finally:
+            await queue.put(("done", None))
+
+    producers = [asyncio.create_task(http_producer()), asyncio.create_task(fc_producer())]
+    done_count = 0
+    while done_count < 2:
+        kind, payload = await queue.get()
+        if kind == "done":
+            done_count += 1
+            continue
+        if payload is not None:
+            yield payload
+
+    await asyncio.gather(*producers, return_exceptions=True)
+
+
 async def orchestrate_parallel_compare_stream(
     query: str,
     max_bytes: int = 350_000,
@@ -631,55 +974,41 @@ async def orchestrate_parallel_compare_stream(
         return
 
     if fincrawler_is_configured():
-        fc_rows = _placeholder_retailer_rows(q)
-        for row in fc_rows:
+        placeholders = _placeholder_retailer_rows(q)
+        for row in placeholders:
             yield {"type": "retailer", "data": row}
 
-        resolved = await _fincrawler_compare_rows(q)
-        if resolved is not None:
-            by_id = {r["retailer_id"]: r for r in resolved}
-            for rid, _, _ in RETAILERS:
-                row = by_id.get(rid)
-                if row is not None:
-                    yield {"type": "retailer", "data": row}
-            async for updated in _http_fallback_weak_retailers(q, resolved, max_bytes):
-                yield {"type": "retailer", "data": updated}
-            yield {
-                "type": "summary",
-                "data": {
-                    "query": q,
-                    "retailers": resolved,
-                    "ranked_by_lowest_indicative": _rank(resolved),
-                    "tips": _tips_for_query(q),
-                    "disclaimer": _FINCRAWLER_DISCLAIMER,
-                },
-            }
-            return
+        row_by_id = {r["retailer_id"]: r for r in placeholders}
 
-    rows = _placeholder_retailer_rows(q)
-    for row in rows:
+        async for row in _stream_hybrid_compare_rows(q, max_bytes, row_by_id):
+            yield {"type": "retailer", "data": row}
+
+        weak_rows = list(row_by_id.values())
+        async for updated in _http_fallback_weak_retailers(q, weak_rows, max_bytes):
+            merged, changed = _merge_stream_row(row_by_id, updated)
+            if changed:
+                yield {"type": "retailer", "data": merged}
+
+        final_rows = _order_rows(list(row_by_id.values()))
+        yield {
+            "type": "summary",
+            "data": {
+                "query": q,
+                "retailers": final_rows,
+                "ranked_by_lowest_indicative": _rank(final_rows),
+                "tips": _tips_for_query(q),
+                "disclaimer": _FINCRAWLER_DISCLAIMER,
+            },
+        }
+        return
+
+    placeholders = _placeholder_retailer_rows(q)
+    for row in placeholders:
         yield {"type": "retailer", "data": row}
 
-    row_by_id = {r["retailer_id"]: r for r in rows}
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=httpx.Timeout(40.0),
-        headers={
-            "User-Agent": BROWSER_UA,
-            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    ) as client:
-        task_objs = [
-            asyncio.create_task(
-                _run_retailer_stream_timed(client, rid, lab, url_fn(q), max_bytes, i, q)
-            )
-            for i, (rid, lab, url_fn) in enumerate(RETAILERS)
-        ]
-        for finished in asyncio.as_completed(task_objs):
-            row = await finished
-            row_by_id[row["retailer_id"]] = row
-            yield {"type": "retailer", "data": row}
+    row_by_id = {r["retailer_id"]: r for r in placeholders}
+    async for row in _stream_parallel_http_rows(q, max_bytes, row_by_id, stream_fast=True):
+        yield {"type": "retailer", "data": row}
 
     ordered = _order_rows(list(row_by_id.values()))
     yield {

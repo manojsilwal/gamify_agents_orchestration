@@ -21,8 +21,10 @@ plus raw ``text/html`` responses.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -39,6 +41,8 @@ __all__ = [
     "fincrawler_scrape_page",
     "fincrawler_scrape_with_escalation",
     "fincrawler_search_shopping",
+    "fincrawler_search_shopping_retailer",
+    "fincrawler_search_shopping_stream",
     "get_crawl_options",
     "map_scorecard_from_quote",
 ]
@@ -373,6 +377,29 @@ def _merge_crawl_options(body: dict[str, Any], crawl_options: CrawlOptions | Non
     return merged
 
 
+def _shop_search_payload(
+    query: str,
+    crawl_options: CrawlOptions | None,
+    *,
+    retailers: list[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "query": query,
+        "google_fallback": True,
+        "max_concurrency": int(os.environ.get("FINCRAWLER_SHOP_MAX_CONCURRENCY", "5")),
+    }
+    if retailers:
+        payload["retailers"] = retailers
+    per_retailer = os.environ.get("SHOP_STREAM_PER_RETAILER_TIMEOUT_SEC", "").strip()
+    if per_retailer:
+        payload["per_retailer_timeout_sec"] = float(per_retailer)
+    return _merge_crawl_options(payload, crawl_options)
+
+
+def _shop_search_timeout_seconds() -> float:
+    return float(os.environ.get("FINCRAWLER_TIMEOUT_SECONDS", "300"))
+
+
 async def fincrawler_scrape_page(
     url: str,
     max_bytes: int = 350_000,
@@ -521,6 +548,8 @@ async def fincrawler_google_shopping(
 async def fincrawler_search_shopping(
     query: str,
     crawl_options: CrawlOptions | None = None,
+    *,
+    retailers: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Call the advanced multi-retailer search endpoint in FinCrawler.
@@ -529,8 +558,8 @@ async def fincrawler_search_shopping(
     if not fincrawler_is_configured():
         return {"ok": False, "error": "fincrawler_not_configured"}
 
-    timeout_sec = float(os.environ.get("FINCRAWLER_TIMEOUT_SECONDS", "180"))
-    body = _merge_crawl_options({"query": query, "google_fallback": True}, crawl_options)
+    timeout_sec = _shop_search_timeout_seconds()
+    body = _shop_search_payload(query, crawl_options, retailers=retailers)
 
     post_result = await _fincrawler_post("/shop/search", body, timeout_sec=timeout_sec)
     if not post_result.get("ok"):
@@ -542,3 +571,58 @@ async def fincrawler_search_shopping(
         return {"ok": True, "results": data}
     except Exception as e:
         return {"ok": False, "error": "json_parse_error", "detail": str(e)}
+
+
+async def fincrawler_search_shopping_retailer(
+    query: str,
+    retailer_key: str,
+    crawl_options: CrawlOptions | None = None,
+) -> dict[str, Any]:
+    """FinCrawler shop search for a single retailer (parallel-safe)."""
+    return await fincrawler_search_shopping(
+        query,
+        crawl_options,
+        retailers=[retailer_key],
+    )
+
+
+async def fincrawler_search_shopping_stream(
+    query: str,
+    crawl_options: CrawlOptions | None = None,
+    *,
+    retailers: list[str] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Consume FinCrawler POST /shop/search/stream NDJSON events."""
+    if not fincrawler_is_configured():
+        yield {"type": "error", "data": {"error": "fincrawler_not_configured"}}
+        return
+
+    timeout_sec = _shop_search_timeout_seconds()
+    body = _shop_search_payload(query, crawl_options, retailers=retailers)
+
+    base = _fincrawler_base()
+    url = f"{base}/shop/search/stream"
+    headers = {**_fincrawler_headers(accept="application/x-ndjson"), "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(timeout_sec),
+    ) as client:
+        try:
+            async with client.stream("POST", url, json=body, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    detail = (await resp.aread()).decode(errors="replace")[:400]
+                    yield {
+                        "type": "error",
+                        "data": {"error": f"fincrawler_http_{resp.status_code}", "detail": detail},
+                    }
+                    return
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except Exception:
+                        continue
+        except httpx.RequestError as e:
+            yield {"type": "error", "data": {"error": f"fincrawler_fetch_failed: {e!s}"}}

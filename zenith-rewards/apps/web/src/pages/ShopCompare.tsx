@@ -13,7 +13,10 @@ const RETAILER_SLOTS: { retailer_id: string; label: string }[] = [
 ]
 
 function isRowFetching(row: RetailerCompareRow): boolean {
-  return row.isFetching === true || row.error === 'fetching' || row.fetch_source === 'pending'
+  if (row.isFetching === true) return true
+  if (row.error === 'fetching') return true
+  if (row.fetch_source === 'pending' && row.indicative_low_usd == null && !row.ok) return true
+  return false
 }
 
 function placeholderRetailerRows(_query?: string): RetailerCompareRow[] {
@@ -110,11 +113,12 @@ function shoppingProductLine(
   worst: number | null,
 ): string {
   const title = shortLine(product.title, 48)
+  const sellerPrefix = product.seller ? `${product.seller} · ` : ''
   const discount =
     product.discount_pct != null && product.discount_pct > 0
       ? ` · -${product.discount_pct}% off`
       : savingsPct(product.price_usd, worst)
-  return `${retailerLabel} — ${title} · ${formatUsd(product.price_usd)}${discount}`
+  return `${retailerLabel} — ${sellerPrefix}${title} · ${formatUsd(product.price_usd)}${discount}`
 }
 
 function rankedProductLine(
@@ -124,11 +128,12 @@ function rankedProductLine(
   worst: number | null,
 ): string {
   const title = shortLine(product.title, 40)
+  const sellerPrefix = product.seller ? `${product.seller} · ` : ''
   const discount =
     product.discount_pct != null && product.discount_pct > 0
       ? ` · -${product.discount_pct}% off`
       : savingsPct(product.price_usd, worst)
-  return `${rank}. ${retailerLabel} — ${title} · ${formatUsd(product.price_usd)}${discount}`
+  return `${rank}. ${retailerLabel} — ${sellerPrefix}${title} · ${formatUsd(product.price_usd)}${discount}`
 }
 
 function issuerTileTheme(issuer: string): { icon: string; ring: string; bg: string } {
@@ -394,6 +399,9 @@ export function ShopCompare() {
                 </div>
                 <p className="text-xs text-on-surface-variant font-mono">
                   {completedRetailerCount} of 5 retailers · {productCount} products
+                  {completedRetailerCount === 0 && (
+                    <> · Searching via FinCrawler (tiered)… first results usually in 30–90s</>
+                  )}
                 </p>
               </div>
             )}
@@ -416,7 +424,13 @@ export function ShopCompare() {
                         {row.label} — Fetching...
                       </p>
                     ) : row.products && row.products.length > 0 ? (
-                      row.products.slice(0, 5).map((product, idx) => (
+                      <>
+                        {row.products.length > 1 && (
+                          <p className="text-[10px] uppercase tracking-wide text-on-surface-variant font-semibold">
+                            {row.products.length} options
+                          </p>
+                        )}
+                        {row.products.slice(0, 5).map((product, idx) => (
                         <p
                           key={`${row.retailer_id}-${idx}-${product.price_usd}`}
                           className="text-sm text-on-surface font-mono leading-relaxed truncate"
@@ -424,7 +438,8 @@ export function ShopCompare() {
                         >
                           {shoppingProductLine(row.label, product, metrics.worst)}
                         </p>
-                      ))
+                      ))}
+                      </>
                     ) : (
                       <p
                         className="text-sm text-on-surface font-mono leading-relaxed truncate"

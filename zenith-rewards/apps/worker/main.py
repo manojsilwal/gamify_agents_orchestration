@@ -108,7 +108,11 @@ async def shopping_compare_stream(req: ShoppingCompareRequest):
         async for event in orchestrate_parallel_compare_stream(req.query.strip(), req.max_bytes):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
-    return StreamingResponse(ndjson(), media_type="application/x-ndjson; charset=utf-8")
+    return StreamingResponse(
+        ndjson(),
+        media_type="application/x-ndjson; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/stocks/{ticker}/quote")

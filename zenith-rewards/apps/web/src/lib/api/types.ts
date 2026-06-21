@@ -79,6 +79,7 @@ export type ShoppingProduct = {
   list_price_usd?: number | null
   discount_pct?: number | null
   url?: string | null
+  seller?: string | null
 }
 
 export type RetailerCompareRow = {

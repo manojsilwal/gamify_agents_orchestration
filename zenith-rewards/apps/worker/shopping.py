@@ -451,6 +451,7 @@ def merge_better_retailer_row(base: dict, candidate: dict) -> dict:
         "error",
         "likely_blocked",
         "products",
+        "fetch_source",
     ):
         out[k] = candidate.get(k)
     return out
