@@ -16,7 +16,7 @@ function isRowFetching(row: RetailerCompareRow): boolean {
   return row.isFetching === true || row.error === 'fetching' || row.fetch_source === 'pending'
 }
 
-function placeholderRetailerRows(query: string): RetailerCompareRow[] {
+function placeholderRetailerRows(_query?: string): RetailerCompareRow[] {
   return RETAILER_SLOTS.map(({ retailer_id, label }) => ({
     retailer_id,
     label,
